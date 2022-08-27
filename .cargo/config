@@ -1,0 +1,10 @@
+[target.mips64-unknown-linux-muslabi64]
+linker = "mips64-openwrt-linux-gcc"
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.mipsel-unknown-linux-musl]
+linker = "mipsel-openwrt-linux-gcc"
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=-crt-static"]
