@@ -13,10 +13,14 @@ strip = "symbols"
 
 
 [dependencies]
+bincode = "1.3.3"
 byteorder = "1.4.3"
 libc = "0.2.132"
 neli = "0.6.2"
 nix = { version = "0.25.0", features = ["net", "socket", "time"] }
+pnet = "0.31.0"
+pnet_transport = "0.31.0"
+serde = { version = "1.0.144", features = ["derive"] }
 
 [patch.crates-io]
 nix = { path = "../nix" }

@@ -4,14 +4,18 @@ mod cake;
 mod config;
 mod netlink;
 mod pinger;
+mod pinger_icmp;
+mod pinger_icmp_ts;
 
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::{thread, time};
+use std::{process, thread, time};
 
 use crate::config::Config;
-use crate::netlink::{find_interface, find_qdisc, set_qdisc_rate};
-use crate::pinger::{Pinger, PingerICMPEcho};
+use crate::netlink::{find_interface, find_qdisc, get_interface_stats, set_qdisc_rate};
+use crate::pinger::Pinger;
+use crate::pinger_icmp::PingerICMPEcho;
+use crate::pinger_icmp_ts::PingerICMPTimestamps;
 
 #[macro_export]
 macro_rules! error {
@@ -30,7 +34,7 @@ fn main() {
     println!("starting up");
 
     let config = Config::new();
-    test(config);
+    test(&config);
 
     let mut reflectors: Vec<IpAddr> = Vec::new();
 
@@ -39,18 +43,30 @@ fn main() {
     reflectors.push(IpAddr::from_str("9.9.9.9").unwrap());
     reflectors.push(IpAddr::from_str("9.9.9.10").unwrap());
 
-    let pinger = PingerICMPEcho::new(reflectors);
-    let pinger_receiver = pinger.clone();
-    let pinger_sender = pinger.clone();
+    get_interface_stats(config.upload_interface.as_str()).unwrap();
 
-    let receiver_handle = thread::spawn(move || pinger_receiver.receive_loop());
-    let sender_handle = thread::spawn(move || pinger_sender.sender_loop());
+    let mut pinger_receiver =
+        PingerICMPTimestamps::new((process::id() & 0xFFFF) as u16, reflectors.clone());
+    let mut pinger_sender =
+        PingerICMPTimestamps::new((process::id() & 0xFFFF) as u16, reflectors.clone());
 
-    receiver_handle.join().unwrap();
-    sender_handle.join().unwrap();
+    let receiver_handle = thread::Builder::new()
+        .name("receiver".to_string())
+        .spawn(move || pinger_receiver.receive_loop())
+        .unwrap();
+    let sender_handle = thread::Builder::new()
+        .name("sender".to_string())
+        .spawn(move || pinger_sender.sender_loop())
+        .unwrap();
+
+    let threads = vec![receiver_handle, sender_handle];
+
+    for thread in threads {
+        thread.join().unwrap();
+    }
 }
 
-fn test(config: Config) {
+fn test(config: &Config) {
     if true {
         return;
     }

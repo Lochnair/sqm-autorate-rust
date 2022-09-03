@@ -8,9 +8,11 @@ use neli::nl::{NlPayload, Nlmsghdr};
 use neli::rtnl::{Ifinfomsg, Rtattr, Tcmsg};
 use neli::socket::NlSocketHandle;
 use neli::types::{Buffer, RtBuffer};
+use serde::Deserialize;
 use std::error::Error;
 use std::fmt::Display;
 
+use bincode::deserialize;
 use std::fmt;
 
 #[derive(Default, Debug)]
@@ -30,6 +32,34 @@ impl Display for NoQdiscFoundError {
     }
 }
 
+#[derive(Deserialize, Copy, Clone, Default, Debug)]
+pub struct RtnlLinkStats64 {
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_errors: u64,
+    pub tx_errors: u64,
+    pub rx_dropped: u64,
+    pub tx_dropped: u64,
+    pub multicast: u64,
+    pub collisions: u64,
+    pub rx_length_errors: u64,
+    pub rx_over_errors: u64,
+    pub rx_crc_errors: u64,
+    pub rx_frame_errors: u64,
+    pub rx_fifo_errors: u64,
+    pub rx_missed_errors: u64,
+    pub tx_aborted_errors: u64,
+    pub tx_carrier_errors: u64,
+    pub tx_fifo_errors: u64,
+    pub tx_heartbeat_errors: u64,
+    pub tx_window_errors: u64,
+    pub rx_compressed: u64,
+    pub tx_compressed: u64,
+    pub rx_nohandler: u64,
+}
+
 #[allow(dead_code)]
 pub struct Qdisc {
     ifindex: i32,
@@ -39,8 +69,7 @@ pub struct Qdisc {
     parent: u32,
 }
 
-pub fn find_interface(ifname: &str) -> Result<i32, Box<dyn Error>> {
-    let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
+fn nl_interface_get(socket: &mut NlSocketHandle, ifname: &str) -> Result<(), Box<dyn Error>> {
     let mut attrs = RtBuffer::new();
 
     const RTEXT_FILTER_VF: i32 = 1 << 0;
@@ -70,6 +99,14 @@ pub fn find_interface(ifname: &str) -> Result<i32, Box<dyn Error>> {
 
     socket.send(nlhdr)?;
 
+    Ok(())
+}
+
+pub fn find_interface(ifname: &str) -> Result<i32, Box<dyn Error>> {
+    let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
+
+    nl_interface_get(&mut socket, ifname).expect("Wrong when sending intf");
+
     for response in socket.iter(false) {
         let header: Nlmsghdr<Rtm, Ifinfomsg> = response?;
 
@@ -84,6 +121,40 @@ pub fn find_interface(ifname: &str) -> Result<i32, Box<dyn Error>> {
 
     // we shouldn't reach here
     Ok(-1)
+}
+
+pub fn get_interface_stats(ifname: &str) -> Result<RtnlLinkStats64, Box<dyn Error>> {
+    let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
+
+    nl_interface_get(&mut socket, ifname).expect("Wrong when sending intf");
+
+    for response in socket.iter(false) {
+        let header: Nlmsghdr<Rtm, Ifinfomsg> = response?;
+
+        if header.nl_type != Rtm::Newlink {
+            return Err(Box::new(NlError::msg("Netlink error retrieving link")));
+        }
+
+        if let NlPayload::Payload(p) = header.nl_payload {
+            for attr in p.rtattrs.iter() {
+                //println!("{:?}", attr.rta_type);
+
+                if attr.rta_type == Ifla::Stats64 {
+                    println!("{:?}", attr.rta_payload.as_ref());
+                    let buf = attr.rta_payload.as_ref();
+
+                    let stats: RtnlLinkStats64 = deserialize(buf).unwrap();
+
+                    println!("stats rx: {}", stats.rx_bytes);
+                    println!("stats tx: {}", stats.tx_bytes);
+
+                    return Ok(stats);
+                }
+            }
+        }
+    }
+
+    Err(Box::new(NlError::msg("Error getting stats")))
 }
 
 pub fn find_qdisc(ifindex: i32) -> Result<Qdisc, Box<dyn Error>> {
