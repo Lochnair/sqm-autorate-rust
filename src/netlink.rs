@@ -137,16 +137,10 @@ pub fn get_interface_stats(ifname: &str) -> Result<RtnlLinkStats64, Box<dyn Erro
 
         if let NlPayload::Payload(p) = header.nl_payload {
             for attr in p.rtattrs.iter() {
-                //println!("{:?}", attr.rta_type);
-
                 if attr.rta_type == Ifla::Stats64 {
-                    println!("{:?}", attr.rta_payload.as_ref());
                     let buf = attr.rta_payload.as_ref();
 
                     let stats: RtnlLinkStats64 = deserialize(buf).unwrap();
-
-                    println!("stats rx: {}", stats.rx_bytes);
-                    println!("stats tx: {}", stats.tx_bytes);
 
                     return Ok(stats);
                 }
