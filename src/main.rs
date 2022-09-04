@@ -38,8 +38,6 @@ fn main() {
 
     let mut reflectors: Vec<IpAddr> = Vec::new();
 
-    reflectors.push(IpAddr::from_str("1.0.0.1").unwrap());
-    reflectors.push(IpAddr::from_str("1.1.1.1").unwrap());
     reflectors.push(IpAddr::from_str("9.9.9.9").unwrap());
     reflectors.push(IpAddr::from_str("9.9.9.10").unwrap());
 
