@@ -1,12 +1,11 @@
 use std::error::Error;
-use std::net::{IpAddr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
-use std::{process, thread, time};
+use std::net::IpAddr;
+use std::{thread, time};
 
 use crate::Pinger;
 use byteorder::*;
 use nix::sys::time::TimeValLike;
 use nix::time::{clock_gettime, ClockId};
-use pnet::packet::icmp::IcmpType;
 use pnet::packet::icmp::IcmpTypes::EchoReply;
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::*;
