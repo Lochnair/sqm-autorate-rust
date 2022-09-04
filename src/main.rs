@@ -1,5 +1,3 @@
-extern crate core;
-
 mod cake;
 mod config;
 mod netlink;
@@ -13,8 +11,8 @@ use std::{process, thread, time};
 
 use crate::config::Config;
 use crate::netlink::{find_interface, find_qdisc, get_interface_stats, set_qdisc_rate};
-use crate::pinger::Pinger;
-use crate::pinger_icmp::PingerICMPEcho;
+use crate::pinger::{PingListener, PingSender, Pinger};
+use crate::pinger_icmp::{PingerICMPEcho, PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::PingerICMPTimestamps;
 
 #[macro_export]
@@ -43,18 +41,24 @@ fn main() {
 
     get_interface_stats(config.upload_interface.as_str()).unwrap();
 
-    let mut pinger_receiver =
+    /*let mut pinger_receiver =
         PingerICMPTimestamps::new((process::id() & 0xFFFF) as u16, reflectors.clone());
     let mut pinger_sender =
-        PingerICMPTimestamps::new((process::id() & 0xFFFF) as u16, reflectors.clone());
+        PingerICMPTimestamps::new((process::id() & 0xFFFF) as u16, reflectors.clone());*/
+
+    let mut pinger_receiver =
+        PingerICMPEchoListener::new((process::id() & 0xFFF) as u16, reflectors.clone());
+
+    let mut pinger_sender =
+        PingerICMPEchoSender::new((process::id() & 0xFFF) as u16, reflectors.clone());
 
     let receiver_handle = thread::Builder::new()
         .name("receiver".to_string())
-        .spawn(move || pinger_receiver.receive_loop())
+        .spawn(move || pinger_receiver.listen())
         .unwrap();
     let sender_handle = thread::Builder::new()
         .name("sender".to_string())
-        .spawn(move || pinger_sender.sender_loop())
+        .spawn(move || pinger_sender.send())
         .unwrap();
 
     let threads = vec![receiver_handle, sender_handle];

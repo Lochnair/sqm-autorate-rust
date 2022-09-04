@@ -21,6 +21,7 @@ nix = { version = "0.25.0", features = ["net", "socket", "time"] }
 pnet = "0.31.0"
 pnet_transport = "0.31.0"
 serde = { version = "1.0.144", features = ["derive"] }
+serde_bytes = "0.11"
 
 [patch.crates-io]
 nix = { path = "../nix" }
