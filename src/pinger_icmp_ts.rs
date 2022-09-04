@@ -1,11 +1,9 @@
 use bincode::{deserialize, serialize};
 use std::error::Error;
-use std::net::{IpAddr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
-use std::{process, thread, time};
+use std::net::IpAddr;
+use std::{thread, time};
 
 use crate::Pinger;
-use byteorder::*;
-use nix::sys::time::TimeValLike;
 use nix::time::{clock_gettime, ClockId};
 use pnet::packet::icmp::IcmpTypes::{Timestamp, TimestampReply};
 use pnet::packet::ip::IpNextHeaderProtocols;
@@ -66,7 +64,7 @@ impl Pinger for PingerICMPTimestamps {
 
             let time = clock_gettime(ClockId::CLOCK_REALTIME).unwrap();
             let time_since_midnight: i64 =
-                ((time.tv_sec() % 86400 * 1000) + (time.tv_nsec() / 1000000));
+                (time.tv_sec() % 86400 * 1000) + (time.tv_nsec() / 1000000);
 
             if packet.get_icmp_type() != TimestampReply {
                 continue;
@@ -79,11 +77,11 @@ impl Pinger for PingerICMPTimestamps {
                 continue;
             }
 
-            let rtt: i64 = time_since_midnight - hdr.originate_time as i64;
-            let dl_time: i64 = time_since_midnight - hdr.transmit_time as i64;
-            let ul_time: i64 = hdr.receive_time as i64 - hdr.originate_time as i64;
+            let rtt: i64 = time_since_midnight - hdr.originate_time.to_be() as i64;
+            let dl_time: i64 = time_since_midnight - hdr.transmit_time.to_be() as i64;
+            let ul_time: i64 = hdr.receive_time.to_be() as i64 - hdr.originate_time.to_be() as i64;
 
-            println!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}", "ICMP", sender.to_string(), hdr.sequence, time_since_midnight, hdr.originate_time, hdr.receive_time, hdr.transmit_time, rtt, ul_time, dl_time);
+            println!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}", "ICMP", sender.to_string(), hdr.sequence, time_since_midnight, hdr.originate_time.to_be(), hdr.receive_time.to_be(), hdr.transmit_time.to_be(), rtt, ul_time, dl_time);
         }
     }
 
@@ -121,13 +119,13 @@ impl Pinger for PingerICMPTimestamps {
         let time_since_midnight: u32 =
             ((time.tv_sec() % 86400 * 1000) + (time.tv_nsec() / 1000000)) as u32;
 
-        let mut icmp = ICMPTimestamp {
-            type_: 255,
-            code: 255,
-            checksum: 65535,
+        let icmp = ICMPTimestamp {
+            type_: 0,
+            code: 0,
+            checksum: 0,
             identifier: id,
             sequence: seq,
-            originate_time: time_since_midnight,
+            originate_time: time_since_midnight.to_be(),
             receive_time: 0,
             transmit_time: 0,
         };
