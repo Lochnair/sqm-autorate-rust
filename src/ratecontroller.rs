@@ -186,8 +186,8 @@ impl Ratecontroller {
                         down_deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
                         up_deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-                        down_delta_stat = Utils::a_else_b(down_deltas[3], down_deltas[1]);
-                        up_delta_stat = Utils::a_else_b(up_deltas[3], up_deltas[1]);
+                        down_delta_stat = Utils::a_else_b(down_deltas[2], down_deltas[0]);
+                        up_delta_stat = Utils::a_else_b(up_deltas[2], up_deltas[0]);
 
                         if down_delta_stat > 0.0 && up_delta_stat > 0.0 {
                             /*
