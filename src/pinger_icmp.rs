@@ -1,228 +1,121 @@
-use bincode::{deserialize, serialize};
 use std::error::Error;
 use std::net::IpAddr;
-use std::{thread, time};
 
-use crate::pinger::{PingListener, PingSender};
-use crate::Pinger;
+use crate::pinger::{PingListener, PingReply, PingSender};
 use byteorder::*;
-use neli::err::NlError;
+use etherparse::TransportSlice::{Icmpv4, Icmpv6};
+use etherparse::{IcmpEchoHeader, Icmpv4Header, Icmpv4Type, SlicedPacket};
 use nix::sys::time::TimeValLike;
 use nix::time::{clock_gettime, ClockId};
-use pnet::packet::icmp::IcmpTypes::EchoReply;
-use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::packet::*;
-use pnet_transport::TransportChannelType::Layer4;
-use pnet_transport::TransportProtocol::Ipv4;
-use pnet_transport::*;
-use serde::{Deserialize, Serialize};
-
-#[derive(Deserialize, Serialize, Clone, Default, Debug)]
-//#[repr(C)]
-pub struct ICMPEcho {
-    type_: u8,
-    code: u8,
-    checksum: u16,
-    identifier: u16,
-    sequence: u16,
-    #[serde(with = "serde_bytes")]
-    payload: Vec<u8>,
-}
-
-pub struct PingerICMPEcho {
-    id: u16,
-    reflectors: Vec<IpAddr>,
-    rx: TransportReceiver,
-    tx: TransportSender,
-}
 
 pub struct PingerICMPEchoListener {
     id: u16,
-    reflectors: Vec<IpAddr>,
 }
 
 pub struct PingerICMPEchoSender {
     id: u16,
-    reflectors: Vec<IpAddr>,
-}
-
-fn calculate_checksum(buffer: &mut [u8]) -> u16 {
-    let mut sum = 0u32;
-    for word in buffer.chunks(2) {
-        let mut part = u16::from(word[0]) << 8;
-        if word.len() > 1 {
-            part += u16::from(word[1]);
-        }
-        sum = sum.wrapping_add(u32::from(part));
-    }
-
-    while (sum >> 16) > 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-
-    !sum as u16
-}
-
-impl Pinger for PingerICMPEcho {
-    fn new(id: u16, reflectors: Vec<IpAddr>) -> Self {
-        let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
-
-        // Create a new transport channel, dealing with layer 4 packets on a test protocol
-        // It has a receive buffer of 4096 bytes.
-        let (tx, rx) = match transport_channel(4096, protocol) {
-            Ok((tx, rx)) => (tx, rx),
-            Err(e) => panic!(
-                "An error occurred when creating the transport channel: {}",
-                e
-            ),
-        };
-
-        PingerICMPEcho {
-            id,
-            reflectors,
-            rx,
-            tx,
-        }
-    }
-
-    fn receive_loop(&mut self) {
-        let mut iter = icmp_packet_iter(&mut self.rx);
-        loop {
-            let (packet, sender) = match iter.next() {
-                Ok(res) => res,
-                Err(_) => continue,
-            };
-
-            let curr_time: u64 = clock_gettime(ClockId::CLOCK_MONOTONIC)
-                .unwrap()
-                .num_milliseconds() as u64;
-
-            if packet.get_icmp_type() != EchoReply {
-                continue;
-            }
-
-            let icmp_response = icmp::echo_reply::EchoReplyPacket::new(packet.packet()).unwrap();
-
-            if icmp_response.get_identifier() != self.id {
-                continue;
-            }
-
-            let sent_time: u64 = icmp_response.payload().read_u64::<NativeEndian>().unwrap();
-            let rtt = curr_time - sent_time;
-
-            println!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Sent time: {:8}  | RTT: {:8}", "ICMP", sender.to_string(), icmp_response.get_sequence_number(), curr_time, sent_time, rtt);
-        }
-    }
-
-    fn sender_loop(&mut self) {
-        println!("My ID is: {}", self.id);
-
-        let mut seq: u16 = 0;
-        let tick_duration_ms: u16 = 500;
-        let sleep_duration = time::Duration::from_millis(tick_duration_ms as u64);
-
-        loop {
-            let reflectors = self.reflectors.clone();
-
-            for reflector in reflectors.iter() {
-                self.send_ping(reflector, self.id, seq)
-                    .expect("TODO: panic message");
-            }
-
-            thread::sleep(sleep_duration);
-
-            seq += 1;
-
-            if seq > u16::MAX {
-                seq = 0;
-            }
-        }
-    }
-
-    fn send_ping(&mut self, reflector: &IpAddr, id: u16, seq: u16) -> Result<(), Box<dyn Error>> {
-        let time = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap();
-
-        let mut buf = [0u8; 8 + 56];
-
-        let mut packet = icmp::echo_request::MutableEchoRequestPacket::new(&mut buf).unwrap();
-
-        packet.populate(&icmp::echo_request::EchoRequest {
-            icmp_type: icmp::IcmpTypes::EchoRequest,
-            icmp_code: icmp::IcmpCode::new(0),
-            checksum: 0,
-            identifier: id,
-            sequence_number: seq,
-            payload: Vec::from(time.num_milliseconds().to_ne_bytes()),
-        });
-
-        packet.set_checksum(icmp::checksum(
-            &icmp::IcmpPacket::new(&packet.packet()).unwrap(),
-        ));
-
-        self.tx.send_to(packet, *reflector).expect("Error sending");
-
-        Ok(())
-    }
 }
 
 impl PingListener for PingerICMPEchoListener {
-    fn new(id: u16, reflectors: Vec<IpAddr>) -> Self {
-        PingerICMPEchoListener { id, reflectors }
+    fn new(id: u16) -> Self {
+        PingerICMPEchoListener { id }
     }
 
     fn get_id(&self) -> u16 {
         self.id
     }
 
-    fn get_reflectors(&self) -> Vec<IpAddr> {
-        self.reflectors.clone()
-    }
+    // Result: RTT, down time, up time
+    fn parse_packet(
+        reflector: IpAddr,
+        buf: &[u8],
+        len: usize,
+    ) -> Result<PingReply, Box<dyn Error>> {
+        match SlicedPacket::from_ip(buf) {
+            Err(value) => println!("Err {:?}", value),
+            Ok(value) => match value.transport {
+                Some(Icmpv4(icmp)) => match icmp.icmp_type() {
+                    Icmpv4Type::EchoReply(echo) => {
+                        let time_sent = icmp
+                            .payload()
+                            .read_u64::<NativeEndian>()
+                            .expect("Couldn't parse payload to time")
+                            as i64;
 
-    fn parse_packet(buf: &[u8], len: usize) -> Result<(i64, i64, i64), Box<dyn Error>> {
-        if len != 44 {
-            println!("len: {}", len);
-            return Err(Box::new(NlError::msg("Wrong length")));
+                        let time_now = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap();
+
+                        let time_ms = time_now.num_milliseconds();
+
+                        let rtt = time_ms - time_sent;
+                        return Ok(PingReply {
+                            reflector,
+                            seq: echo.seq,
+                            rtt,
+                            current_time: time_ms,
+                            down_time: (rtt / 2) as f64,
+                            up_time: (rtt / 2) as f64,
+                            originate_timestamp: 0,
+                            receive_timestamp: 0,
+                            transmit_timestamp: 0,
+                            last_receive_time_s: time_now.tv_sec() as f64
+                                + (time_now.tv_nsec() as f64 / 1e9),
+                        });
+                    }
+                    _ => {}
+                },
+                Some(Icmpv6(icmp)) => {}
+                Some(_) => {}
+                None => {}
+            },
         }
 
-        let hdr: ICMPEcho = deserialize(buf).expect("Failed to parse ICMP packet");
-
-        todo!()
+        Ok(PingReply {
+            reflector: IpAddr::from([0, 0, 0, 0]),
+            seq: 0,
+            rtt: 0,
+            current_time: 0,
+            down_time: 0.0,
+            up_time: 0.0,
+            originate_timestamp: 0,
+            receive_timestamp: 0,
+            transmit_timestamp: 0,
+            last_receive_time_s: 0.0,
+        })
     }
 }
 
 impl PingSender for PingerICMPEchoSender {
-    fn new(id: u16, reflectors: Vec<IpAddr>) -> Self {
-        PingerICMPEchoSender { id, reflectors }
+    fn new(id: u16) -> Self {
+        PingerICMPEchoSender { id }
     }
 
     fn get_id(&self) -> u16 {
         self.id
-    }
-
-    fn get_reflectors(&self) -> Vec<IpAddr> {
-        self.reflectors.clone()
     }
 
     fn craft_packet(&self, seq: u16) -> Vec<u8> {
         let time = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap();
         let time_u64: u64 = time.num_milliseconds() as u64;
+        let payload = time_u64.to_ne_bytes();
 
-        let mut hdr = ICMPEcho {
-            type_: 8,
-            code: 0,
-            checksum: 0,
-            identifier: self.get_id(),
-            sequence: seq,
-            payload: time_u64.to_ne_bytes().to_vec(),
-        };
+        // Construct a header with checksum based on the payload
+        let hdr = Icmpv4Header::with_checksum(
+            Icmpv4Type::EchoRequest(IcmpEchoHeader {
+                id: self.get_id(),
+                seq,
+            }),
+            &payload,
+        );
 
-        println!("id: {}", hdr.identifier);
-        println!("seq: {}", hdr.sequence);
+        // Create a buffer to hold the result of header + payload
+        let mut result = Vec::<u8>::with_capacity(hdr.header_len() + payload.len());
 
-        let mut tmp_buf_v = serialize(&hdr).unwrap();
-        let mut tmp_buf = tmp_buf_v.as_mut_slice();
-        hdr.checksum = calculate_checksum(tmp_buf).to_be();
+        // Write the header to the buffer
+        hdr.write(&mut result).expect("Error writing packet");
 
-        serialize(&hdr).unwrap()
+        // Write the payload to the buffer
+        result.append(&mut payload.to_vec());
+
+        result
     }
 }
