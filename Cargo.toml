@@ -1,5 +1,5 @@
 [package]
-name = "cake-autorate-rust"
+name = "sqm-autorate-rust"
 version = "0.1.0"
 edition = "2021"
 
