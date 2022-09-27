@@ -20,13 +20,18 @@ impl PingListener for PingerICMPEchoListener {
         id: u16,
         reflector: IpAddr,
         buf: &[u8],
-        len: usize,
     ) -> Result<PingReply, Box<dyn Error>> {
         match SlicedPacket::from_ip(buf) {
             Err(value) => println!("Err {:?}", value),
             Ok(value) => match value.transport {
                 Some(Icmpv4(icmp)) => match icmp.icmp_type() {
                     Icmpv4Type::EchoReply(echo) => {
+                        if echo.id != id {
+                            return Err(Box::new(PingParseError {
+                                msg: "Wrong ID".to_string(),
+                            }));
+                        }
+
                         let time_sent = icmp
                             .payload()
                             .read_u64::<NativeEndian>()
