@@ -7,36 +7,33 @@ use crate::Utils;
 use etherparse::icmpv4::TimestampMessage;
 use etherparse::TransportSlice::Icmpv4;
 use etherparse::{Icmpv4Header, Icmpv4Type, SlicedPacket};
+use log::warn;
 use nix::time::{clock_gettime, ClockId};
 
-pub struct PingerICMPTimestampListener {
-    id: u16,
-}
+pub struct PingerICMPTimestampListener {}
 
-pub struct PingerICMPTimestampSender {
-    id: u16,
-}
+pub struct PingerICMPTimestampSender {}
 
 impl PingListener for PingerICMPTimestampListener {
-    fn new(id: u16) -> Self {
-        PingerICMPTimestampListener { id }
-    }
-
-    fn get_id(&self) -> u16 {
-        self.id
-    }
-
     // Result: RTT, down time, up time
     fn parse_packet(
+        &self,
+        id: u16,
         reflector: IpAddr,
         buf: &[u8],
         len: usize,
     ) -> Result<PingReply, Box<dyn Error>> {
         match SlicedPacket::from_ip(buf) {
-            Err(value) => println!("Err {:?}", value),
+            Err(value) => warn!("Error parsing packet: {:?}", value),
             Ok(value) => match value.transport {
                 Some(Icmpv4(icmp)) => match icmp.icmp_type() {
                     Icmpv4Type::TimestampReply(reply) => {
+                        if reply.id != id {
+                            return Err(Box::new(PingParseError {
+                                msg: "Wrong ID".to_string(),
+                            }));
+                        }
+
                         let time_now = clock_gettime(ClockId::CLOCK_REALTIME).unwrap();
                         let time_since_midnight: i64 = (time_now.tv_sec() as i64 % 86400 * 1000)
                             + (time_now.tv_nsec() as i64 / 1000000);
@@ -70,20 +67,14 @@ impl PingListener for PingerICMPTimestampListener {
             },
         }
 
-        Err(Box::new(PingParseError {}))
+        Err(Box::new(PingParseError {
+            msg: "Reached end of parsing function".to_string(),
+        }))
     }
 }
 
 impl PingSender for PingerICMPTimestampSender {
-    fn new(id: u16) -> Self {
-        PingerICMPTimestampSender { id }
-    }
-
-    fn get_id(&self) -> u16 {
-        self.id
-    }
-
-    fn craft_packet(&self, seq: u16) -> Vec<u8> {
+    fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8> {
         let time = clock_gettime(ClockId::CLOCK_REALTIME).unwrap();
         let time_since_midnight: u32 =
             ((time.tv_sec() % 86400 * 1000) + (time.tv_nsec() / 1000000)) as u32;
@@ -93,7 +84,7 @@ impl PingSender for PingerICMPTimestampSender {
         // Construct a header with checksum based on the payload
         let hdr = Icmpv4Header::with_checksum(
             Icmpv4Type::TimestampRequest(TimestampMessage {
-                id: self.id,
+                id,
                 seq,
                 originate_timestamp: time_since_midnight,
                 receive_timestamp: 0,

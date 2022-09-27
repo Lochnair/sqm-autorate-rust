@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::unix::io::RawFd;
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -53,11 +53,9 @@ fn open_socket(type_: SocketType) -> nix::Result<RawFd> {
 }
 
 pub trait PingListener {
-    fn new(id: u16) -> Self;
-    fn get_id(&self) -> u16;
-
     fn listen(
         &mut self,
+        id: u16,
         type_: SocketType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_sender: Sender<PingReply>,
@@ -85,7 +83,7 @@ pub trait PingListener {
                 continue;
             }
 
-            let reply = match Self::parse_packet(addr, buf, size) {
+            let reply = match self.parse_packet(id, addr, buf, size) {
                 Ok(val) => val,
                 Err(e) => {
                     error!(
@@ -101,16 +99,19 @@ pub trait PingListener {
         }
     }
 
-    fn parse_packet(reflector: IpAddr, buf: &[u8], len: usize)
-        -> Result<PingReply, Box<dyn Error>>;
+    fn parse_packet(
+        &self,
+        id: u16,
+        reflector: IpAddr,
+        buf: &[u8],
+        len: usize,
+    ) -> Result<PingReply, Box<dyn Error>>;
 }
 
 pub trait PingSender {
-    fn new(id: u16) -> Self;
-    fn get_id(&self) -> u16;
-
     fn send(
         &mut self,
+        id: u16,
         type_: SocketType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
     ) -> Result<(), Box<dyn Error>> {
@@ -141,7 +142,7 @@ pub trait PingSender {
                     }
                 }
 
-                let buf_v = self.craft_packet(seq);
+                let buf_v = self.craft_packet(id, seq);
                 let buf = buf_v.as_slice();
 
                 sendto(socket, buf, addr.as_ref(), MsgFlags::empty()).expect("Couldn't send ping");
@@ -157,5 +158,5 @@ pub trait PingSender {
         }
     }
 
-    fn craft_packet(&self, seq: u16) -> Vec<u8>;
+    fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8>;
 }

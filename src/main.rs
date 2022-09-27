@@ -26,11 +26,12 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::{panic, process, thread};
 
-use crate::config::Config;
+use crate::config::{Config, MeasurementType};
 use crate::log::SimpleLogger;
 use crate::netlink::{Netlink, Qdisc};
 use crate::pinger::{PingListener, PingSender, SocketType};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
+use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
 use crate::utils::Utils;
@@ -51,7 +52,7 @@ fn main() -> ExitCode {
         }
     };
 
-    crate::log::init(config.log_level).expect("Couldn't initialize logger");
+    log::init(config.log_level).expect("Couldn't initialize logger");
 
     let mut reflectors = match config.load_reflectors() {
         Ok(refl) => refl,
@@ -96,10 +97,22 @@ fn main() -> ExitCode {
     let (baseliner_stats_sender, baseliner_stats_receiver) = channel();
     let (reselect_sender, reselect_receiver) = channel();
 
-    //let mut pinger_receiver = PingerICMPTimestampListener::new(id);
-    //let mut pinger_sender = PingerICMPTimestampSender::new(id);
-    let mut pinger_receiver = PingerICMPEchoListener::new(id);
-    let mut pinger_sender = PingerICMPEchoSender::new(id);
+    let (mut pinger_receiver, mut pinger_sender) = match config.measurement_type {
+        MeasurementType::ICMP => (
+            Box::new(PingerICMPEchoListener {}) as Box<dyn PingListener + Send>,
+            Box::new(PingerICMPEchoSender {}) as Box<dyn PingSender + Send>,
+        ),
+        MeasurementType::ICMPTimestamps => (
+            Box::new(PingerICMPTimestampListener {}) as Box<dyn PingListener + Send>,
+            Box::new(PingerICMPTimestampSender {}) as Box<dyn PingSender + Send>,
+        ),
+        MeasurementType::NTP => {
+            todo!()
+        }
+        MeasurementType::TCPTimestamps => {
+            todo!()
+        }
+    };
 
     let baseliner = Baseliner {
         config: config.clone(),
@@ -137,6 +150,7 @@ fn main() -> ExitCode {
         .name("receiver".to_string())
         .spawn(move || {
             match pinger_receiver.listen(
+                id,
                 SocketType::ICMP,
                 reflector_peers_lock_clone,
                 baseliner_stats_sender,
@@ -157,7 +171,7 @@ fn main() -> ExitCode {
     let sender_handle = thread::Builder::new()
         .name("sender".to_string())
         .spawn(
-            move || match pinger_sender.send(SocketType::ICMP, reflector_peers_lock_clone) {
+            move || match pinger_sender.send(id, SocketType::ICMP, reflector_peers_lock_clone) {
                 Ok(_) => {}
                 Err(e) => {
                     error!("Error occured in sender thread: {}", e);

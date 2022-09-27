@@ -1,4 +1,4 @@
-use crate::error::{ConfigParseError, MissingConfigError};
+use crate::error::{ConfigParseError, InvalidMeasurementTypeError, MissingConfigError};
 use log::Level;
 #[cfg(feature = "uci")]
 use rust_uci::Uci;
@@ -19,11 +19,27 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum AutorateType {
+pub(crate) enum MeasurementType {
     ICMP = 1,
     ICMPTimestamps,
     NTP,
     TCPTimestamps,
+}
+
+impl FromStr for MeasurementType {
+    type Err = InvalidMeasurementTypeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        return match s.to_lowercase().as_str() {
+            "icmp" => Ok(MeasurementType::ICMP),
+            "icmp-timestamps" => Ok(MeasurementType::ICMPTimestamps),
+            "ntp" => Ok(MeasurementType::NTP),
+            "tcp-timestamps" => Ok(MeasurementType::TCPTimestamps),
+            &_ => Err(InvalidMeasurementTypeError {
+                type_: s.to_string(),
+            }),
+        };
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +62,7 @@ pub(crate) struct Config {
     pub(crate) download_delay_ms: f64,
     pub(crate) high_load_level: f64,
     pub(crate) min_change_interval: f64,
+    pub(crate) measurement_type: MeasurementType,
     pub(crate) num_reflectors: u8,
     pub(crate) reflector_list_file: String,
     pub(crate) speed_hist_size: u32,
@@ -118,6 +135,11 @@ impl Config {
                 "SQMA_HIGH_LOAD_LEVEL",
                 "sqm-autorate.@advanced_settings[0].high_load_level",
                 Some(0.8),
+            )?,
+            measurement_type: Self::get::<MeasurementType>(
+                "SQMA_MEASUREMENT_TYPE",
+                "sqm-autorate.@advanced_settings[0].measurement_type",
+                Some(MeasurementType::ICMPTimestamps),
             )?,
             min_change_interval: Self::get::<f64>(
                 "SQMA_MIN_CHANGE_INTERVAL",

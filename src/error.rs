@@ -25,6 +25,23 @@ impl Display for ConfigParseError {
 }
 
 #[derive(Default, Debug)]
+pub struct InvalidMeasurementTypeError {
+    pub(crate) type_: String,
+}
+
+impl Error for InvalidMeasurementTypeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
+
+impl Display for InvalidMeasurementTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Couldn't find measurement type: {}", self.type_)
+    }
+}
+
+#[derive(Default, Debug)]
 pub struct MissingConfigError {
     pub(crate) config_key: String,
 }
@@ -63,7 +80,9 @@ impl Display for NoQdiscFoundError {
 }
 
 #[derive(Default, Debug)]
-pub struct PingParseError;
+pub struct PingParseError {
+    pub(crate) msg: String,
+}
 
 impl Error for PingParseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
@@ -74,6 +93,6 @@ impl Error for PingParseError {
 // Implement std::fmt::Display for AppError
 impl Display for PingParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Couldn't parse received ping packet") // user-facing output
+        write!(f, "Couldn't parse received ping packet: {}", self.msg) // user-facing output
     }
 }

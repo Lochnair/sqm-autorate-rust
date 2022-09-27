@@ -9,25 +9,15 @@ use etherparse::{IcmpEchoHeader, Icmpv4Header, Icmpv4Type, SlicedPacket};
 use nix::sys::time::TimeValLike;
 use nix::time::{clock_gettime, ClockId};
 
-pub struct PingerICMPEchoListener {
-    id: u16,
-}
+pub struct PingerICMPEchoListener {}
 
-pub struct PingerICMPEchoSender {
-    id: u16,
-}
+pub struct PingerICMPEchoSender {}
 
 impl PingListener for PingerICMPEchoListener {
-    fn new(id: u16) -> Self {
-        PingerICMPEchoListener { id }
-    }
-
-    fn get_id(&self) -> u16 {
-        self.id
-    }
-
     // Result: RTT, down time, up time
     fn parse_packet(
+        &self,
+        id: u16,
         reflector: IpAddr,
         buf: &[u8],
         len: usize,
@@ -70,30 +60,21 @@ impl PingListener for PingerICMPEchoListener {
             },
         }
 
-        Err(Box::new(PingParseError {}))
+        Err(Box::new(PingParseError {
+            msg: "Reached end of parsing function".to_string(),
+        }))
     }
 }
 
 impl PingSender for PingerICMPEchoSender {
-    fn new(id: u16) -> Self {
-        PingerICMPEchoSender { id }
-    }
-
-    fn get_id(&self) -> u16 {
-        self.id
-    }
-
-    fn craft_packet(&self, seq: u16) -> Vec<u8> {
+    fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8> {
         let time = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap();
         let time_u64: u64 = time.num_milliseconds() as u64;
         let payload = time_u64.to_ne_bytes();
 
         // Construct a header with checksum based on the payload
         let hdr = Icmpv4Header::with_checksum(
-            Icmpv4Type::EchoRequest(IcmpEchoHeader {
-                id: self.get_id(),
-                seq,
-            }),
+            Icmpv4Type::EchoRequest(IcmpEchoHeader { id, seq }),
             &payload,
         );
 
