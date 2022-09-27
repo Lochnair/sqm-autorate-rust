@@ -179,8 +179,8 @@ impl Config {
         uci_key: &str,
         default: Option<T>,
     ) -> Result<T, Box<dyn Error>> {
-        return match Self::get_value(env_key, uci_key, None) {
-            Ok(val) => match val.parse::<T>() {
+        return match Self::get_value(env_key, uci_key) {
+            Some(val) => match val.parse::<T>() {
                 Ok(parsed_val) => Ok(parsed_val),
                 // Ran into an compilation error while trying to return the
                 // error as-is, so using my own error type to indicate something went wrong while parsing
@@ -188,60 +188,45 @@ impl Config {
                     config_key: env_key.to_string(),
                 })),
             },
-            Err(e) => {
+            None => {
                 return match default {
                     Some(val) => Ok(val),
-                    None => Err(e),
+                    None => Err(Box::new(MissingConfigError {
+                        config_key: env_key.to_string(),
+                    })),
                 }
             }
         };
     }
 
-    fn get_value(
-        env_key: &str,
-        uci_key: &str,
-        default: Option<String>,
-    ) -> Result<String, Box<dyn Error>> {
-        let mut err: Option<Box<dyn Error>>;
-
-        match env::var(env_key) {
-            Ok(val) => return Ok(val),
-            Err(e) => err = Some(Box::new(e)),
-        };
-
-        match Self::get_from_uci(uci_key) {
-            Ok(opt) => match opt {
-                Some(val) => return Ok(val),
-                None => {}
-            },
-            Err(e) => err = Some(e),
-        };
-
-        match default {
-            Some(val) => return Ok(val),
-            None => {
-                err = Some(Box::new(MissingConfigError {
-                    config_key: env_key.to_string(),
-                }))
-            }
+    fn get_value(env_key: &str, uci_key: &str) -> Option<String> {
+        if let Ok(val) = env::var(env_key) {
+            return Some(val);
         }
 
-        Err(err.unwrap())
+        if let Some(val) = Self::get_from_uci(uci_key) {
+            return Some(val);
+        }
+
+        None
     }
 
     #[cfg(feature = "uci")]
-    fn get_from_uci(key: &str) -> Result<Option<String>, Box<dyn Error>> {
+    fn get_from_uci(key: &str) -> Option<String> {
         let mut uci: Uci = Uci::new()?;
 
         return match uci.get(key) {
-            Ok(val) => Ok(Some(val)),
-            Err(e) => Err(Box::new(e)),
+            Ok(val) => Some(val),
+            Err(e) => {
+                warn!("Problem getting config from UCI: {}", e);
+                None
+            }
         };
     }
 
     #[cfg(not(feature = "uci"))]
-    fn get_from_uci(_: &str) -> Result<Option<String>, Box<dyn Error>> {
-        Ok(None)
+    fn get_from_uci(_: &str) -> Option<String> {
+        None
     }
 
     pub fn load_reflectors(&self) -> Result<Vec<IpAddr>, Box<dyn Error>> {
