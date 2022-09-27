@@ -14,7 +14,7 @@ mod reflector_selector;
 mod utils;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
-use ::log::{error, info, Level, LevelFilter};
+use ::log::{debug, error, info, Level, LevelFilter};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::IpAddr;
@@ -195,9 +195,37 @@ fn main() -> ExitCode {
         reselect_trigger: reselect_sender.clone(),
     };
 
+    let dl_direction;
+    let ul_direction;
+
+    if config.download_interface.starts_with("ifb") || config.download_interface.starts_with("veth")
+    {
+        dl_direction = StatsDirection::TX;
+    } else if config.download_interface == "br-lan" {
+        dl_direction = StatsDirection::RX;
+    } else {
+        dl_direction = StatsDirection::RX;
+    }
+
+    if config.upload_interface.starts_with("ifb") || config.upload_interface.starts_with("veth") {
+        ul_direction = StatsDirection::RX;
+    } else {
+        ul_direction = StatsDirection::TX;
+    }
+
+    debug!(
+        "Download direction: {}:{:?}",
+        config.download_interface, dl_direction
+    );
+
+    debug!(
+        "Upload direction: {}:{:?}",
+        config.upload_interface, ul_direction
+    );
+
     let ratecontroller_handle = thread::Builder::new()
         .name("ratecontroller".to_string())
-        .spawn(move || ratecontroller.run(StatsDirection::RX, StatsDirection::TX))
+        .spawn(move || ratecontroller.run(dl_direction, ul_direction))
         .expect("Couldn't spawn ratecontroller thread");
 
     threads.push(ratecontroller_handle);
