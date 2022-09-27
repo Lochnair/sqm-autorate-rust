@@ -14,9 +14,8 @@ mod reflector_selector;
 mod utils;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
-use ::log::{debug, error, info, Level, LevelFilter};
+use ::log::{debug, error, info};
 use std::collections::HashMap;
-use std::error::Error;
 use std::net::IpAddr;
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -27,8 +26,7 @@ use std::time::Duration;
 use std::{panic, process, thread};
 
 use crate::config::{Config, MeasurementType};
-use crate::log::SimpleLogger;
-use crate::netlink::{Netlink, Qdisc};
+use crate::netlink::Netlink;
 use crate::pinger::{PingListener, PingSender, SocketType};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};

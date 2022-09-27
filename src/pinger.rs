@@ -83,7 +83,7 @@ pub trait PingListener {
                 continue;
             }
 
-            let reply = match self.parse_packet(id, addr, buf, size) {
+            let reply = match self.parse_packet(id, addr, buf) {
                 Ok(val) => val,
                 Err(e) => {
                     error!(
@@ -104,7 +104,6 @@ pub trait PingListener {
         id: u16,
         reflector: IpAddr,
         buf: &[u8],
-        len: usize,
     ) -> Result<PingReply, Box<dyn Error>>;
 }
 

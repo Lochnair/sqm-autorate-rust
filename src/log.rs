@@ -1,8 +1,3 @@
-use static_init::dynamic;
-use std::error::Error;
-use std::fmt;
-use std::str::FromStr;
-use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};

@@ -21,7 +21,6 @@ impl PingListener for PingerICMPTimestampListener {
         id: u16,
         reflector: IpAddr,
         buf: &[u8],
-        len: usize,
     ) -> Result<PingReply, Box<dyn Error>> {
         match SlicedPacket::from_ip(buf) {
             Err(value) => warn!("Error parsing packet: {:?}", value),

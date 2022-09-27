@@ -75,7 +75,7 @@ impl Ratecontroller {
         let sleep_time_ns = ((self.config.min_change_interval % 1.0) * 1e9) as u32;
         let sleep_time = Duration::new(sleep_time_s, sleep_time_ns);
 
-        let (start_s, start_ns) = Utils::get_current_time();
+        let (start_s, _) = Utils::get_current_time();
         let (mut lastchg_s, mut lastchg_ns) = Utils::get_current_time();
         let mut lastchg_t = lastchg_s - start_s + lastchg_ns / 1e9;
         let mut lastdump_t = lastchg_t - 310.0;
@@ -179,8 +179,8 @@ impl Ratecontroller {
                         mut next_ul_rate,
                         mut rx_load,
                         mut tx_load,
-                        mut up_utilisation,
-                        mut down_utilisation,
+                        up_utilisation,
+                        down_utilisation,
                     ): (f64, f64, f64, f64, f64, f64);
 
                     rx_load = -1.0;
