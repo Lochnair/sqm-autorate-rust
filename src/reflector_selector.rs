@@ -5,14 +5,14 @@ use rand::{thread_rng, Rng};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 
 pub struct ReflectorSelector {
     pub(crate) config: Config,
     pub(crate) owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    pub(crate) reflector_peers_lock: Arc<Mutex<Vec<IpAddr>>>,
+    pub(crate) reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub(crate) reflector_pool: Vec<IpAddr>,
     pub(crate) trigger_channel: Receiver<bool>,
 }
@@ -50,7 +50,7 @@ impl ReflectorSelector {
             }
 
             let mut next_peers: Vec<IpAddr> = Vec::new();
-            let mut reflectors_peers = self.reflector_peers_lock.lock().unwrap();
+            let mut reflectors_peers = self.reflector_peers_lock.write().unwrap();
 
             // Include all current peers
             for reflector in reflectors_peers.iter() {
@@ -76,7 +76,7 @@ impl ReflectorSelector {
             sleep(baseline_sleep_time);
 
             // Re-acquire the lock when we wake up again
-            reflectors_peers = self.reflector_peers_lock.lock().unwrap();
+            reflectors_peers = self.reflector_peers_lock.write().unwrap();
             reflectors_peers.len();
 
             let mut candidates = Vec::new();

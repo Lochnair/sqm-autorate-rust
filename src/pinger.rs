@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::unix::io::RawFd;
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -59,7 +59,7 @@ pub trait PingListener {
     fn listen(
         &mut self,
         type_: SocketType,
-        reflectors_lock: Arc<Mutex<Vec<IpAddr>>>,
+        reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_sender: Sender<PingReply>,
     ) -> Result<(), Box<dyn Error>> {
         let socket = open_socket(type_)?;
@@ -80,7 +80,7 @@ pub trait PingListener {
             let addr_bytes = sender.expect("Should be an address here").ip();
             let addr = IpAddr::from(addr_bytes.to_be_bytes());
 
-            let reflectors = reflectors_lock.lock().unwrap();
+            let reflectors = reflectors_lock.read().unwrap();
             if !reflectors.contains(&addr) {
                 continue;
             }
@@ -112,7 +112,7 @@ pub trait PingSender {
     fn send(
         &mut self,
         type_: SocketType,
-        reflectors_lock: Arc<Mutex<Vec<IpAddr>>>,
+        reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
     ) -> Result<(), Box<dyn Error>> {
         let socket = open_socket(type_)?;
 
@@ -121,7 +121,7 @@ pub trait PingSender {
         let sleep_duration = Duration::from_millis(tick_duration_ms as u64);
 
         loop {
-            let reflectors_unlocked = reflectors_lock.lock().unwrap();
+            let reflectors_unlocked = reflectors_lock.read().unwrap();
             let reflectors = reflectors_unlocked.clone();
             drop(reflectors_unlocked);
 

@@ -21,7 +21,7 @@ use std::net::IpAddr;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 use std::{panic, process, thread};
@@ -68,7 +68,7 @@ fn main() -> ExitCode {
     // Create data structures shared by different threads
     let owd_baseline = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
     let owd_recent = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-    let reflector_peers_lock = Arc::new(Mutex::new(Vec::<IpAddr>::new()));
+    let reflector_peers_lock = Arc::new(RwLock::new(Vec::<IpAddr>::new()));
     let mut reflector_pool = Vec::<IpAddr>::new();
     let reflector_pool_size = reflectors.len();
 
@@ -83,12 +83,12 @@ fn main() -> ExitCode {
 
     match reflector_pool_size > 5 {
         true => {
-            let mut peers = reflector_peers_lock.lock().unwrap();
+            let mut peers = reflector_peers_lock.write().unwrap();
             peers.append(default_reflectors.to_vec().as_mut());
             reflector_pool.append(reflectors.as_mut());
         }
         false => {
-            let mut peers = reflector_peers_lock.lock().unwrap();
+            let mut peers = reflector_peers_lock.write().unwrap();
             peers.append(default_reflectors.to_vec().as_mut());
         }
     }

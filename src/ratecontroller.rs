@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::Write;
 use std::net::IpAddr;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -65,7 +65,7 @@ pub struct Ratecontroller {
     pub(crate) config: Config,
     pub(crate) owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     pub(crate) owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    pub(crate) reflectors_lock: Arc<Mutex<Vec<IpAddr>>>,
+    pub(crate) reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub(crate) reselect_trigger: Sender<bool>,
 }
 
@@ -164,7 +164,7 @@ impl Ratecontroller {
                 // change speeds here
                 let owd_baseline = self.owd_baseline.lock().unwrap();
                 let owd_recent = self.owd_recent.lock().unwrap();
-                let reflectors = self.reflectors_lock.lock().unwrap();
+                let reflectors = self.reflectors_lock.read().unwrap();
 
                 let mut down_delta_stat: f64;
                 let mut up_delta_stat: f64;
