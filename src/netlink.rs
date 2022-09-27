@@ -137,7 +137,7 @@ impl Netlink {
         Err(Box::new(NlError::msg("Error getting stats")))
     }
 
-    pub fn find_qdisc(ifindex: i32) -> Result<Qdisc, Box<dyn Error>> {
+    pub fn qdisc_from_ifindex(ifindex: i32) -> Result<Qdisc, Box<dyn Error>> {
         let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
         let tc_msg = Tcmsg::new(
             u8::from(RtAddrFamily::Unspecified),
@@ -199,9 +199,14 @@ impl Netlink {
         return Err(Box::new(NoQdiscFoundError));
     }
 
-    pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth: u64) -> Result<(), Box<dyn Error>> {
+    pub fn qdisc_from_ifname(ifname: &str) -> Result<Qdisc, Box<dyn Error>> {
+        let ifindex = Netlink::find_interface(ifname)?;
+        Netlink::qdisc_from_ifindex(ifindex)
+    }
+
+    pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64) -> Result<(), Box<dyn Error>> {
         let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
-        let bandwidth = bandwidth * 1000 / 8;
+        let bandwidth = bandwidth_kbit * 1000 / 8;
 
         let mut attrs = RtBuffer::new();
 

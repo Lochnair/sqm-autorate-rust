@@ -1,3 +1,4 @@
+use log::error;
 use nix::sys::socket::{
     recvfrom, sendto, socket, AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType,
     SockaddrIn, SockaddrIn6, SockaddrLike,
@@ -16,6 +17,7 @@ pub enum SocketType {
     UDP,
 }
 
+#[allow(dead_code)]
 pub struct PingReply {
     pub(crate) reflector: IpAddr,
     pub(crate) seq: u16,
@@ -29,9 +31,9 @@ pub struct PingReply {
     pub(crate) last_receive_time_s: f64,
 }
 
-fn open_socket(type_: SocketType) -> RawFd {
+fn open_socket(type_: SocketType) -> nix::Result<RawFd> {
     match type_ {
-        ICMP => {
+        SocketType::ICMP => {
             socket(
                 AddressFamily::Inet,
                 SockType::Raw,
@@ -39,7 +41,7 @@ fn open_socket(type_: SocketType) -> RawFd {
                 SockProtocol::ICMP,
             )
         }
-        UDP => {
+        SocketType::UDP => {
             socket(
                 AddressFamily::Inet,
                 SockType::Datagram,
@@ -48,7 +50,6 @@ fn open_socket(type_: SocketType) -> RawFd {
             )
         }
     }
-    .expect("Couldn't open socket")
 }
 
 pub trait PingListener {
@@ -60,8 +61,8 @@ pub trait PingListener {
         type_: SocketType,
         reflectors_lock: Arc<Mutex<Vec<IpAddr>>>,
         stats_sender: Sender<PingReply>,
-    ) {
-        let socket = open_socket(type_);
+    ) -> Result<(), Box<dyn Error>> {
+        let socket = open_socket(type_)?;
 
         loop {
             let mut v: Vec<u8> = vec![0; 40];
@@ -87,12 +88,15 @@ pub trait PingListener {
             let reply = match Self::parse_packet(addr, buf, size) {
                 Ok(val) => val,
                 Err(e) => {
-                    println!("Shit went to hell: {}", e.to_string());
+                    error!(
+                        "Something went wrong while parsing packet: {}",
+                        e.to_string()
+                    );
                     continue;
                 }
             };
 
-            println!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}", "ICMP", addr.to_string(), reply.seq, reply.current_time, reply.originate_timestamp, reply.receive_timestamp, reply.transmit_timestamp, reply.rtt, reply.up_time, reply.down_time);
+            //debug!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}", "ICMP", addr.to_string(), reply.seq, reply.current_time, reply.originate_timestamp, reply.receive_timestamp, reply.transmit_timestamp, reply.rtt, reply.up_time, reply.down_time);
             stats_sender.send(reply).unwrap();
         }
     }
@@ -105,8 +109,12 @@ pub trait PingSender {
     fn new(id: u16) -> Self;
     fn get_id(&self) -> u16;
 
-    fn send(&mut self, type_: SocketType, reflectors_lock: Arc<Mutex<Vec<IpAddr>>>) {
-        let socket = open_socket(type_);
+    fn send(
+        &mut self,
+        type_: SocketType,
+        reflectors_lock: Arc<Mutex<Vec<IpAddr>>>,
+    ) -> Result<(), Box<dyn Error>> {
+        let socket = open_socket(type_)?;
 
         let mut seq: u16 = 0;
         let tick_duration_ms: u16 = 500;

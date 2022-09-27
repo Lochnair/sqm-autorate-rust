@@ -1,5 +1,6 @@
 use crate::pinger::PingReply;
 use crate::{Config, Utils};
+use log::info;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::{Receiver, Sender};
@@ -30,8 +31,8 @@ impl Baseliner {
          * aren't bloat related, with less sensitivity (bigger numbers) we smooth through quick spikes
          * but take longer to respond to real bufferbloat
          */
-        let slow_factor = Utils::ewma_factor(self.config.tick_duration, 135.0);
-        let fast_factor = Utils::ewma_factor(self.config.tick_duration, 0.4);
+        let slow_factor = Utils::ewma_factor(self.config.tick_interval, 135.0);
+        let fast_factor = Utils::ewma_factor(self.config.tick_interval, 0.4);
 
         loop {
             let time_data = self.stats_receiver.recv().unwrap();
@@ -39,13 +40,13 @@ impl Baseliner {
             let mut owd_baseline_map = self.owd_baseline.lock().unwrap();
             let mut owd_recent_map = self.owd_recent.lock().unwrap();
 
-            let mut owd_baseline_new = ReflectorStats {
+            let owd_baseline_new = ReflectorStats {
                 down_ewma: time_data.down_time,
                 up_ewma: time_data.down_time,
                 last_receive_time_s: time_data.last_receive_time_s,
             };
 
-            let mut owd_recent_new = ReflectorStats {
+            let owd_recent_new = ReflectorStats {
                 down_ewma: time_data.down_time,
                 up_ewma: time_data.down_time,
                 last_receive_time_s: time_data.last_receive_time_s,
@@ -79,6 +80,10 @@ impl Baseliner {
             {
                 owd_baseline.last_receive_time_s = time_data.last_receive_time_s - 60.0;
                 owd_recent.last_receive_time_s = time_data.last_receive_time_s - 60.0;
+                info!(
+                    "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
+                    time_data.reflector
+                );
                 let _ = self.reselect_trigger.send(true);
             } else {
                 owd_baseline.down_ewma = owd_baseline.down_ewma * slow_factor
@@ -100,11 +105,11 @@ impl Baseliner {
                 }
             }
 
-            println!(
+            info!(
                 "Reflector {} up baseline = {} down baseline = {}",
                 time_data.reflector, owd_baseline.up_ewma, owd_baseline.down_ewma
             );
-            println!(
+            info!(
                 "Reflector {} up recent = {} down recent = {}",
                 time_data.reflector, owd_recent.up_ewma, owd_recent.down_ewma
             );

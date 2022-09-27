@@ -4,6 +4,7 @@ mod baseliner;
 mod cake;
 mod config;
 mod error;
+mod log;
 mod netlink;
 mod pinger;
 mod pinger_icmp;
@@ -13,7 +14,9 @@ mod reflector_selector;
 mod utils;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
+use ::log::{error, info, Level, LevelFilter};
 use std::collections::HashMap;
+use std::error::Error;
 use std::net::IpAddr;
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -21,25 +24,39 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
-use std::{process, thread};
+use std::{panic, process, thread};
 
 use crate::config::Config;
-use crate::netlink::Netlink;
+use crate::log::SimpleLogger;
+use crate::netlink::{Netlink, Qdisc};
 use crate::pinger::{PingListener, PingSender, SocketType};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
-use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
 use crate::utils::Utils;
 
-fn main() -> ExitCode {
-    println!("starting up");
+const VERSION: &str = "0.0.1";
 
-    let config = Config::new();
+fn main() -> ExitCode {
+    println!("Starting sqm-autorate version {}", VERSION);
+
+    let config = match Config::new() {
+        Ok(val) => val,
+        Err(e) => {
+            println!(
+                "Something went wrong while getting config: {}",
+                e.to_string()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    crate::log::init(config.log_level).expect("Couldn't initialize logger");
+
     let mut reflectors = match config.load_reflectors() {
         Ok(refl) => refl,
         Err(e) => {
-            println!("Couldn't load reflectors: {}", e.to_string());
+            info!("Couldn't load reflector list: {}", e.to_string());
             return ExitCode::FAILURE;
         }
     };
@@ -49,9 +66,9 @@ fn main() -> ExitCode {
     let id = (process::id() & 0xFFFF) as u16;
 
     // Create data structures shared by different threads
-    let mut owd_baseline = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-    let mut owd_recent = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-    let mut reflector_peers_lock = Arc::new(Mutex::new(Vec::<IpAddr>::new()));
+    let owd_baseline = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
+    let owd_recent = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
+    let reflector_peers_lock = Arc::new(Mutex::new(Vec::<IpAddr>::new()));
     let mut reflector_pool = Vec::<IpAddr>::new();
     let reflector_pool_size = reflectors.len();
 
@@ -84,7 +101,7 @@ fn main() -> ExitCode {
     let mut pinger_receiver = PingerICMPEchoListener::new(id);
     let mut pinger_sender = PingerICMPEchoSender::new(id);
 
-    let mut baseliner = Baseliner {
+    let baseliner = Baseliner {
         config: config.clone(),
         owd_baseline: owd_baseline.clone(),
         owd_recent: owd_recent.clone(),
@@ -92,12 +109,20 @@ fn main() -> ExitCode {
         stats_receiver: baseliner_stats_receiver,
     };
 
-    let dl_intf = config.clone().download_interface;
-    let ul_intf = config.clone().upload_interface;
-    let down_ifindex = Netlink::find_interface(dl_intf.as_str()).unwrap();
-    let up_ifindex = Netlink::find_interface(ul_intf.as_str()).unwrap();
-    let down_qdisc = Netlink::find_qdisc(down_ifindex).unwrap();
-    let up_qdisc = Netlink::find_qdisc(up_ifindex).unwrap();
+    let down_qdisc = match Netlink::qdisc_from_ifname(config.download_interface.as_str()) {
+        Ok(qdisc) => qdisc,
+        Err(e) => {
+            error!("Couldn't find download qdisc: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+    let up_qdisc = match Netlink::qdisc_from_ifname(config.upload_interface.as_str()) {
+        Ok(qdisc) => qdisc,
+        Err(e) => {
+            error!("Couldn't find upload qdisc: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
 
     /* Set initial TC values to minimum
      * so there should be no initial bufferbloat to
@@ -111,11 +136,17 @@ fn main() -> ExitCode {
     let receiver_handle = thread::Builder::new()
         .name("receiver".to_string())
         .spawn(move || {
-            pinger_receiver.listen(
+            match pinger_receiver.listen(
                 SocketType::ICMP,
                 reflector_peers_lock_clone,
                 baseliner_stats_sender,
-            )
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Error occured in receiver thread: {}", e);
+                    panic!();
+                }
+            }
         })
         .expect("Couldn't spawn ping receiver thread");
     let baseliner_handle = thread::Builder::new()
@@ -125,7 +156,15 @@ fn main() -> ExitCode {
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
     let sender_handle = thread::Builder::new()
         .name("sender".to_string())
-        .spawn(move || pinger_sender.send(SocketType::ICMP, reflector_peers_lock_clone))
+        .spawn(
+            move || match pinger_sender.send(SocketType::ICMP, reflector_peers_lock_clone) {
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Error occured in sender thread: {}", e);
+                    panic!();
+                }
+            },
+        )
         .expect("Couldn't spawn ping sender thread");
 
     let mut threads = vec![receiver_handle, sender_handle, baseliner_handle];
@@ -133,7 +172,6 @@ fn main() -> ExitCode {
     if reflector_pool_size > 5 {
         let reflector_selector = ReflectorSelector {
             config: config.clone(),
-            owd_baseline: owd_baseline.clone(),
             owd_recent: owd_recent.clone(),
             reflector_peers_lock: reflector_peers_lock.clone(),
             reflector_pool,
@@ -159,13 +197,12 @@ fn main() -> ExitCode {
 
     let ratecontroller_handle = thread::Builder::new()
         .name("ratecontroller".to_string())
-        .spawn(move || ratecontroller.run(StatsDirection::TX, StatsDirection::RX))
+        .spawn(move || ratecontroller.run(StatsDirection::RX, StatsDirection::TX))
         .expect("Couldn't spawn ratecontroller thread");
 
     threads.push(ratecontroller_handle);
 
     for thread in threads {
-        println!("thread: {}", thread.thread().name().unwrap());
         thread.join().unwrap();
     }
 

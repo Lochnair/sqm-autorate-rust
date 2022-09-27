@@ -1,4 +1,5 @@
 use crate::{Config, ReflectorStats};
+use log::{debug, info};
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 use std::collections::HashMap;
@@ -10,7 +11,6 @@ use std::time::Duration;
 
 pub struct ReflectorSelector {
     pub(crate) config: Config,
-    pub(crate) owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     pub(crate) owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     pub(crate) reflector_peers_lock: Arc<Mutex<Vec<IpAddr>>>,
     pub(crate) reflector_pool: Vec<IpAddr>,
@@ -22,8 +22,8 @@ impl ReflectorSelector {
         let mut selector_sleep_time = Duration::new(30, 0);
         let mut reselection_count = 0;
         let baseline_sleep_time = Duration::new(
-            (self.config.tick_duration * std::f64::consts::PI) as u64,
-            (((self.config.tick_duration * std::f64::consts::PI) % 1.0) * 1e9) as u32,
+            (self.config.tick_interval * std::f64::consts::PI) as u64,
+            (((self.config.tick_interval * std::f64::consts::PI) % 1.0) * 1e9) as u32,
         );
 
         let mut rng = thread_rng();
@@ -42,6 +42,7 @@ impl ReflectorSelector {
                 .recv_timeout(selector_sleep_time)
                 .unwrap_or(true);
             reselection_count += 1;
+            info!("Starting reselection [#{}]", reselection_count);
 
             // After 40 reselections, slow down to every 15 minutes
             if reselection_count > 40 {
@@ -53,11 +54,13 @@ impl ReflectorSelector {
 
             // Include all current peers
             for reflector in reflectors_peers.iter() {
+                debug!("Current peer: {}", reflector.to_string());
                 next_peers.push(*reflector);
             }
 
-            for i in 1..20 {
+            for _ in 1..20 {
                 let next_candidate = self.reflector_pool.choose(&mut rng).unwrap();
+                debug!("Next candidate: {}", next_candidate.to_string());
                 next_peers.push(*next_candidate);
             }
 
@@ -68,6 +71,7 @@ impl ReflectorSelector {
             // until the guard goes out of scope
             drop(reflectors_peers);
 
+            debug!("Waiting for candidates to be baselined");
             // Wait for several seconds to allow all reflectors to be re-baselined
             sleep(baseline_sleep_time);
 
@@ -76,16 +80,15 @@ impl ReflectorSelector {
             reflectors_peers.len();
 
             let mut candidates = Vec::new();
-            let owd_baseline = self.owd_baseline.lock().unwrap();
             let owd_recent = self.owd_recent.lock().unwrap();
 
             for peer in next_peers {
                 if owd_recent.contains_key(&peer) {
                     let rtt = (owd_recent[&peer].down_ewma + owd_recent[&peer].up_ewma) as u64;
                     candidates.push((peer, rtt));
-                    println!("Candidate reflector: {} RTT: {}", peer.to_string(), rtt);
+                    info!("Candidate reflector: {} RTT: {}", peer.to_string(), rtt);
                 } else {
-                    println!(
+                    info!(
                         "No data found from candidate reflector: {} - skipping",
                         peer.to_string()
                     );
@@ -101,7 +104,7 @@ impl ReflectorSelector {
             candidates = candidates[0..candidate_pool_num - 1].to_vec();
 
             for (candidate, rtt) in candidates.iter() {
-                println!("Fastest candidate {}: {}", candidate, rtt);
+                info!("Fastest candidate {}: {}", candidate, rtt);
             }
 
             // Shuffle the deck so we avoid overwhelming good reflectors (Fisher-Yates)
@@ -115,9 +118,9 @@ impl ReflectorSelector {
             }
 
             let mut new_peers = Vec::new();
-            for i in 1..num_reflectors {
+            for i in 0..num_reflectors {
                 new_peers.push(candidates[i as usize].0);
-                println!(
+                info!(
                     "New selected peer: {}",
                     candidates[i as usize].0.to_string()
                 );

@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::net::IpAddr;
 
+use crate::error::PingParseError;
 use crate::pinger::{PingListener, PingReply, PingSender};
 use byteorder::*;
 use etherparse::TransportSlice::{Icmpv4, Icmpv6};
@@ -63,24 +64,13 @@ impl PingListener for PingerICMPEchoListener {
                     }
                     _ => {}
                 },
-                Some(Icmpv6(icmp)) => {}
+                Some(Icmpv6(_)) => {}
                 Some(_) => {}
                 None => {}
             },
         }
 
-        Ok(PingReply {
-            reflector: IpAddr::from([0, 0, 0, 0]),
-            seq: 0,
-            rtt: 0,
-            current_time: 0,
-            down_time: 0.0,
-            up_time: 0.0,
-            originate_timestamp: 0,
-            receive_timestamp: 0,
-            transmit_timestamp: 0,
-            last_receive_time_s: 0.0,
-        })
+        Err(Box::new(PingParseError {}))
     }
 }
 
