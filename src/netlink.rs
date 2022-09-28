@@ -106,7 +106,7 @@ impl Netlink {
         }
 
         // we shouldn't reach here
-        Ok(-1)
+        Err(Box::new(NlError::msg("Netlink error retrieving link")))
     }
 
     pub fn get_interface_stats(ifname: &str) -> Result<RtnlLinkStats64, Box<dyn Error>> {
@@ -205,13 +205,13 @@ impl Netlink {
     }
 
     pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64) -> Result<(), Box<dyn Error>> {
-        let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
+        let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[])?;
         let bandwidth = bandwidth_kbit * 1000 / 8;
 
         let mut attrs = RtBuffer::new();
 
-        let attr_type = Rtattr::new(None, Tca::Kind, "cake").unwrap();
-        let mut attr_options = Rtattr::new(None, Tca::Options, Buffer::from(Vec::new())).unwrap();
+        let attr_type = Rtattr::new(None, Tca::Kind, "cake")?;
+        let mut attr_options = Rtattr::new(None, Tca::Options, Buffer::from(Vec::new()))?;
         attr_options.add_nested_attribute(&Rtattr::new(
             None,
             TcaCake::BaseRate64 as u16,
