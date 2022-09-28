@@ -1,4 +1,6 @@
 use crate::error::{ConfigParseError, InvalidMeasurementTypeError, MissingConfigError};
+#[cfg(feature = "uci")]
+use log::warn;
 use log::Level;
 #[cfg(feature = "uci")]
 use rust_uci::Uci;
@@ -213,7 +215,13 @@ impl Config {
 
     #[cfg(feature = "uci")]
     fn get_from_uci(key: &str) -> Option<String> {
-        let mut uci: Uci = Uci::new()?;
+        let mut uci = match Uci::new() {
+            Ok(val) => val,
+            Err(e) => {
+                warn!("Error opening UCI instance: {}", e);
+                return None;
+            }
+        };
 
         return match uci.get(key) {
             Ok(val) => Some(val),
