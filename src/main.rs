@@ -27,7 +27,7 @@ use std::{panic, process, thread};
 
 use crate::config::{Config, MeasurementType};
 use crate::netlink::Netlink;
-use crate::pinger::{PingListener, PingSender, SocketType};
+use crate::pinger::{PingListener, PingSender};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
@@ -104,10 +104,7 @@ fn main() -> ExitCode {
             Box::new(PingerICMPTimestampListener {}) as Box<dyn PingListener + Send>,
             Box::new(PingerICMPTimestampSender {}) as Box<dyn PingSender + Send>,
         ),
-        MeasurementType::NTP => {
-            todo!()
-        }
-        MeasurementType::TCPTimestamps => {
+        MeasurementType::NTP | MeasurementType::TCPTimestamps => {
             todo!()
         }
     };
@@ -149,7 +146,7 @@ fn main() -> ExitCode {
         .spawn(move || {
             match pinger_receiver.listen(
                 id,
-                SocketType::ICMP,
+                config.measurement_type,
                 reflector_peers_lock_clone,
                 baseliner_stats_sender,
             ) {
@@ -168,15 +165,15 @@ fn main() -> ExitCode {
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
     let sender_handle = thread::Builder::new()
         .name("sender".to_string())
-        .spawn(
-            move || match pinger_sender.send(id, SocketType::ICMP, reflector_peers_lock_clone) {
+        .spawn(move || {
+            match pinger_sender.send(id, config.measurement_type, reflector_peers_lock_clone) {
                 Ok(_) => {}
                 Err(e) => {
                     error!("Error occured in sender thread: {}", e);
                     panic!();
                 }
-            },
-        )
+            }
+        })
         .expect("Couldn't spawn ping sender thread");
 
     let mut threads = vec![receiver_handle, sender_handle, baseliner_handle];

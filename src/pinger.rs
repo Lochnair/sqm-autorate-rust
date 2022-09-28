@@ -1,3 +1,4 @@
+use crate::MeasurementType;
 use log::{debug, error};
 use nix::sys::socket::{
     recvfrom, sendto, socket, AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType,
@@ -11,11 +12,6 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
-
-pub enum SocketType {
-    ICMP,
-    UDP,
-}
 
 #[allow(dead_code)]
 pub struct PingReply {
@@ -31,9 +27,9 @@ pub struct PingReply {
     pub(crate) last_receive_time_s: f64,
 }
 
-fn open_socket(type_: SocketType) -> nix::Result<RawFd> {
+fn open_socket(type_: MeasurementType) -> nix::Result<RawFd> {
     match type_ {
-        SocketType::ICMP => {
+        MeasurementType::ICMP | MeasurementType::ICMPTimestamps => {
             socket(
                 AddressFamily::Inet,
                 SockType::Raw,
@@ -41,13 +37,16 @@ fn open_socket(type_: SocketType) -> nix::Result<RawFd> {
                 SockProtocol::ICMP,
             )
         }
-        SocketType::UDP => {
+        MeasurementType::NTP => {
             socket(
                 AddressFamily::Inet,
                 SockType::Datagram,
                 SockFlag::empty(), /* value */
                 SockProtocol::Udp,
             )
+        }
+        _ => {
+            unimplemented!()
         }
     }
 }
@@ -56,7 +55,7 @@ pub trait PingListener {
     fn listen(
         &mut self,
         id: u16,
-        type_: SocketType,
+        type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_sender: Sender<PingReply>,
     ) -> Result<(), Box<dyn Error>> {
@@ -111,7 +110,7 @@ pub trait PingSender {
     fn send(
         &mut self,
         id: u16,
-        type_: SocketType,
+        type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
     ) -> Result<(), Box<dyn Error>> {
         let socket = open_socket(type_)?;

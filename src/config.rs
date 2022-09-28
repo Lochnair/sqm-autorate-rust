@@ -20,8 +20,8 @@ where
     Ok(io::BufReader::new(file).lines())
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum MeasurementType {
+#[derive(Clone, Copy, Debug)]
+pub enum MeasurementType {
     ICMP = 1,
     ICMPTimestamps,
     NTP,
