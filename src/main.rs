@@ -34,7 +34,7 @@ use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
 use crate::utils::Utils;
 
-const VERSION: &str = "0.0.1";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
     println!("Starting sqm-autorate version {}", VERSION);
