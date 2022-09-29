@@ -136,8 +136,10 @@ fn main() -> ExitCode {
      * so there should be no initial bufferbloat to
      * fool the baseliner
      */
-    Netlink::set_qdisc_rate(down_qdisc, 5000).expect("Couldn't set ingress bandwidth");
-    Netlink::set_qdisc_rate(up_qdisc, 1000).expect("Couldn't set egress bandwidth");
+    Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64)
+        .expect("Couldn't set ingress bandwidth");
+    Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64)
+        .expect("Couldn't set egress bandwidth");
     sleep(Duration::new(0, 5e8 as u32));
 
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
