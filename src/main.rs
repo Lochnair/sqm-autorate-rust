@@ -60,8 +60,8 @@ fn main() -> ExitCode {
         }
     };
 
-    // The identifier field in ICMP is only 4 bytes
-    // so take the last 4 bytes of the PID as the ID
+    // The identifier field in ICMP is only 2 bytes
+    // so take the last 2 bytes of the PID as the ID
     let id = (process::id() & 0xFFFF) as u16;
 
     // Create data structures shared by different threads
