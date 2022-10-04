@@ -29,16 +29,16 @@ pub enum PingError {
 
 #[allow(dead_code)]
 pub struct PingReply {
-    pub(crate) reflector: IpAddr,
-    pub(crate) seq: u16,
-    pub(crate) rtt: i64,
-    pub(crate) current_time: i64,
-    pub(crate) down_time: f64,
-    pub(crate) up_time: f64,
-    pub(crate) originate_timestamp: i64,
-    pub(crate) receive_timestamp: i64,
-    pub(crate) transmit_timestamp: i64,
-    pub(crate) last_receive_time_s: f64,
+    pub reflector: IpAddr,
+    pub seq: u16,
+    pub rtt: i64,
+    pub current_time: i64,
+    pub down_time: f64,
+    pub up_time: f64,
+    pub originate_timestamp: i64,
+    pub receive_timestamp: i64,
+    pub transmit_timestamp: i64,
+    pub last_receive_time_s: f64,
 }
 
 fn open_socket(type_: MeasurementType) -> nix::Result<RawFd> {

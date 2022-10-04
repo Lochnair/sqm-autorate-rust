@@ -54,31 +54,31 @@ impl FromStr for MeasurementType {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Config {
+pub struct Config {
     // Network section
-    pub(crate) download_interface: String,
-    pub(crate) upload_interface: String,
-    pub(crate) download_base_kbits: f64,
-    pub(crate) download_min_kbits: f64,
-    pub(crate) upload_base_kbits: f64,
-    pub(crate) upload_min_kbits: f64,
+    pub download_interface: String,
+    pub upload_interface: String,
+    pub download_base_kbits: f64,
+    pub download_min_kbits: f64,
+    pub upload_base_kbits: f64,
+    pub upload_min_kbits: f64,
 
     // Output section
-    pub(crate) log_level: Level,
-    pub(crate) speed_hist_file: String,
-    pub(crate) stats_file: String,
-    pub(crate) suppress_statistics: bool,
+    pub log_level: Level,
+    pub speed_hist_file: String,
+    pub stats_file: String,
+    pub suppress_statistics: bool,
 
     // Advanced section
-    pub(crate) download_delay_ms: f64,
-    pub(crate) high_load_level: f64,
-    pub(crate) min_change_interval: f64,
-    pub(crate) measurement_type: MeasurementType,
-    pub(crate) num_reflectors: u8,
-    pub(crate) reflector_list_file: String,
-    pub(crate) speed_hist_size: u32,
-    pub(crate) tick_interval: f64,
-    pub(crate) upload_delay_ms: f64,
+    pub download_delay_ms: f64,
+    pub high_load_level: f64,
+    pub min_change_interval: f64,
+    pub measurement_type: MeasurementType,
+    pub num_reflectors: u8,
+    pub reflector_list_file: String,
+    pub speed_hist_size: u32,
+    pub tick_interval: f64,
+    pub upload_delay_ms: f64,
 }
 
 impl Config {

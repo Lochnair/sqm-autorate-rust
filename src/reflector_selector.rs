@@ -10,11 +10,11 @@ use std::thread::sleep;
 use std::time::Duration;
 
 pub struct ReflectorSelector {
-    pub(crate) config: Config,
-    pub(crate) owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    pub(crate) reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
-    pub(crate) reflector_pool: Vec<IpAddr>,
-    pub(crate) trigger_channel: Receiver<bool>,
+    pub config: Config,
+    pub owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
+    pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
+    pub reflector_pool: Vec<IpAddr>,
+    pub trigger_channel: Receiver<bool>,
 }
 
 impl ReflectorSelector {

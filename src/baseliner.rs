@@ -9,17 +9,17 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Copy, Clone)]
 pub struct ReflectorStats {
-    pub(crate) down_ewma: f64,
-    pub(crate) up_ewma: f64,
-    pub(crate) last_receive_time_s: f64,
+    pub down_ewma: f64,
+    pub up_ewma: f64,
+    pub last_receive_time_s: f64,
 }
 
 pub struct Baseliner {
-    pub(crate) config: Config,
-    pub(crate) owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    pub(crate) owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    pub(crate) reselect_trigger: Sender<bool>,
-    pub(crate) stats_receiver: Receiver<PingReply>,
+    pub config: Config,
+    pub owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
+    pub owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
+    pub reselect_trigger: Sender<bool>,
+    pub stats_receiver: Receiver<PingReply>,
 }
 
 impl Baseliner {
