@@ -1,8 +1,6 @@
-use std::error::Error;
 use std::net::IpAddr;
 
-use crate::error::PingParseError;
-use crate::pinger::{PingListener, PingReply, PingSender};
+use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use byteorder::*;
 use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{IcmpEchoHeader, Icmpv4Header, Icmpv4Type, SlicedPacket};
@@ -15,21 +13,17 @@ pub struct PingerICMPEchoSender {}
 
 impl PingListener for PingerICMPEchoListener {
     // Result: RTT, down time, up time
-    fn parse_packet(
-        &self,
-        id: u16,
-        reflector: IpAddr,
-        buf: &[u8],
-    ) -> Result<PingReply, Box<dyn Error>> {
+    fn parse_packet(&self, id: u16, reflector: IpAddr, buf: &[u8]) -> Result<PingReply, PingError> {
         match SlicedPacket::from_ip(buf) {
-            Err(value) => println!("Err {:?}", value),
+            Err(err) => return Err(PingError::InvalidPacket(err)),
             Ok(value) => match value.transport {
                 Some(Icmpv4(icmp)) => match icmp.icmp_type() {
                     Icmpv4Type::EchoReply(echo) => {
                         if echo.id != id {
-                            return Err(Box::new(PingParseError {
-                                msg: "Wrong ID".to_string(),
-                            }));
+                            return Err(PingError::WrongID {
+                                expected: id,
+                                found: echo.id,
+                            });
                         }
 
                         let time_sent = icmp
@@ -57,17 +51,18 @@ impl PingListener for PingerICMPEchoListener {
                                 + (time_now.tv_nsec() as f64 / 1e9),
                         });
                     }
-                    _ => {}
+                    _ => {
+                        todo!()
+                    }
                 },
-                Some(Icmpv6(_)) => {}
-                Some(_) => {}
-                None => {}
+                Some(Icmpv6(_)) => {
+                    todo!()
+                }
+                _ => {
+                    unimplemented!()
+                }
             },
         }
-
-        Err(Box::new(PingParseError {
-            msg: "Reached end of parsing function".to_string(),
-        }))
     }
 }
 

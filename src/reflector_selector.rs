@@ -18,7 +18,7 @@ pub struct ReflectorSelector {
 }
 
 impl ReflectorSelector {
-    pub fn run(&self) {
+    pub fn run(&self) -> anyhow::Result<()> {
         let mut selector_sleep_time = Duration::new(30, 0);
         let mut reselection_count = 0;
         let baseline_sleep_time = Duration::new(

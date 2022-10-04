@@ -1,16 +1,27 @@
-use crate::error::{ConfigParseError, InvalidMeasurementTypeError, MissingConfigError};
+use anyhow::Result;
 #[cfg(feature = "uci")]
 use log::warn;
 use log::Level;
 #[cfg(feature = "uci")]
 use rust_uci::Uci;
-use std::error::Error;
 use std::fs::File;
 use std::io::BufRead;
 use std::net::IpAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::{env, io};
+
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("Invalid measurement type")]
+    InvalidMeasurementType(String),
+    #[error("Couldn't parse value for key: `{0}`: invalid value")]
+    ParseError(String),
+    #[error("No config value found for key: `{0}`")]
+    MissingValue(String),
+}
 
 fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
 where
@@ -29,7 +40,7 @@ pub enum MeasurementType {
 }
 
 impl FromStr for MeasurementType {
-    type Err = InvalidMeasurementTypeError;
+    type Err = ConfigError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         return match s.to_lowercase().as_str() {
@@ -37,9 +48,7 @@ impl FromStr for MeasurementType {
             "icmp-timestamps" => Ok(MeasurementType::ICMPTimestamps),
             "ntp" => Ok(MeasurementType::NTP),
             "tcp-timestamps" => Ok(MeasurementType::TCPTimestamps),
-            &_ => Err(InvalidMeasurementTypeError {
-                type_: s.to_string(),
-            }),
+            &_ => Err(ConfigError::InvalidMeasurementType(s.to_string())),
         };
     }
 }
@@ -73,7 +82,7 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Result<Self> {
         Ok(Self {
             // Network section
             download_base_kbits: Self::get::<f64>(
@@ -180,22 +189,18 @@ impl Config {
         env_key: &str,
         uci_key: &str,
         default: Option<T>,
-    ) -> Result<T, Box<dyn Error>> {
+    ) -> Result<T, ConfigError> {
         return match Self::get_value(env_key, uci_key) {
             Some(val) => match val.parse::<T>() {
                 Ok(parsed_val) => Ok(parsed_val),
                 // Ran into an compilation error while trying to return the
                 // error as-is, so using my own error type to indicate something went wrong while parsing
-                Err(_) => Err(Box::new(ConfigParseError {
-                    config_key: env_key.to_string(),
-                })),
+                Err(_) => Err(ConfigError::ParseError(env_key.to_string())),
             },
             None => {
                 return match default {
                     Some(val) => Ok(val),
-                    None => Err(Box::new(MissingConfigError {
-                        config_key: env_key.to_string(),
-                    })),
+                    None => Err(ConfigError::MissingValue(env_key.to_string())),
                 }
             }
         };
@@ -237,7 +242,7 @@ impl Config {
         None
     }
 
-    pub fn load_reflectors(&self) -> Result<Vec<IpAddr>, Box<dyn Error>> {
+    pub fn load_reflectors(&self) -> Result<Vec<IpAddr>> {
         let lines = read_lines(self.reflector_list_file.clone())?;
 
         let mut reflectors: Vec<IpAddr> = Vec::with_capacity(50);

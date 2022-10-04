@@ -3,7 +3,6 @@ extern crate core;
 mod baseliner;
 mod cake;
 mod config;
-mod error;
 mod log;
 mod netlink;
 mod pinger;
@@ -14,16 +13,15 @@ mod reflector_selector;
 mod utils;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
-use ::log::{debug, error, info};
+use ::log::debug;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
-use std::{panic, process, thread};
+use std::{process, thread};
 
 use crate::config::{Config, MeasurementType};
 use crate::netlink::Netlink;
@@ -32,33 +30,15 @@ use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
-use crate::utils::Utils;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn main() -> ExitCode {
+fn main() -> anyhow::Result<()> {
     println!("Starting sqm-autorate version {}", VERSION);
 
-    let config = match Config::new() {
-        Ok(val) => val,
-        Err(e) => {
-            println!(
-                "Something went wrong while getting config: {}",
-                e.to_string()
-            );
-            return ExitCode::FAILURE;
-        }
-    };
-
-    log::init(config.log_level).expect("Couldn't initialize logger");
-
-    let mut reflectors = match config.load_reflectors() {
-        Ok(refl) => refl,
-        Err(e) => {
-            info!("Couldn't load reflector list: {}", e.to_string());
-            return ExitCode::FAILURE;
-        }
-    };
+    let config = Config::new()?;
+    log::init(config.log_level)?;
+    let mut reflectors = config.load_reflectors()?;
 
     // The identifier field in ICMP is only 2 bytes
     // so take the last 2 bytes of the PID as the ID
@@ -72,12 +52,12 @@ fn main() -> ExitCode {
     let reflector_pool_size = reflectors.len();
 
     let default_reflectors = [
-        IpAddr::from_str("9.9.9.9").unwrap(),
-        IpAddr::from_str("8.238.120.14").unwrap(),
-        IpAddr::from_str("74.82.42.42").unwrap(),
-        IpAddr::from_str("194.242.2.2").unwrap(),
-        IpAddr::from_str("208.67.222.222").unwrap(),
-        IpAddr::from_str("94.140.14.14").unwrap(),
+        IpAddr::from_str("9.9.9.9")?,
+        IpAddr::from_str("8.238.120.14")?,
+        IpAddr::from_str("74.82.42.42")?,
+        IpAddr::from_str("194.242.2.2")?,
+        IpAddr::from_str("208.67.222.222")?,
+        IpAddr::from_str("94.140.14.14")?,
     ];
 
     match reflector_pool_size > 5 {
@@ -117,66 +97,37 @@ fn main() -> ExitCode {
         stats_receiver: baseliner_stats_receiver,
     };
 
-    let down_qdisc = match Netlink::qdisc_from_ifname(config.download_interface.as_str()) {
-        Ok(qdisc) => qdisc,
-        Err(e) => {
-            error!("Couldn't find download qdisc: {}", e);
-            return ExitCode::FAILURE;
-        }
-    };
-    let up_qdisc = match Netlink::qdisc_from_ifname(config.upload_interface.as_str()) {
-        Ok(qdisc) => qdisc,
-        Err(e) => {
-            error!("Couldn't find upload qdisc: {}", e);
-            return ExitCode::FAILURE;
-        }
-    };
+    let down_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
+    let up_qdisc = Netlink::qdisc_from_ifname(config.upload_interface.as_str())?;
 
     /* Set initial TC values to minimum
      * so there should be no initial bufferbloat to
      * fool the baseliner
      */
-    Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64)
-        .expect("Couldn't set ingress bandwidth");
-    Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64)
-        .expect("Couldn't set egress bandwidth");
+    Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64)?;
+    Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64)?;
     sleep(Duration::new(0, 5e8 as u32));
 
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    let receiver_handle = thread::Builder::new()
-        .name("receiver".to_string())
-        .spawn(move || {
-            match pinger_receiver.listen(
+    let receiver_handle = thread::Builder::new().name("receiver".to_string()).spawn(
+        move || -> anyhow::Result<()> {
+            pinger_receiver.listen(
                 id,
                 config.measurement_type,
                 reflector_peers_lock_clone,
                 baseliner_stats_sender,
-            ) {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Error occured in receiver thread: {}", e);
-                    panic!();
-                }
-            }
-        })
-        .expect("Couldn't spawn ping receiver thread");
+            )
+        },
+    )?;
     let baseliner_handle = thread::Builder::new()
         .name("baseliner".to_string())
-        .spawn(move || baseliner.run())
-        .expect("Couldn't spawn baseliner thread");
+        .spawn(move || -> anyhow::Result<()> { baseliner.run() })?;
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    let sender_handle = thread::Builder::new()
-        .name("sender".to_string())
-        .spawn(move || {
-            match pinger_sender.send(id, config.measurement_type, reflector_peers_lock_clone) {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Error occured in sender thread: {}", e);
-                    panic!();
-                }
-            }
-        })
-        .expect("Couldn't spawn ping sender thread");
+    let sender_handle = thread::Builder::new().name("sender".to_string()).spawn(
+        move || -> anyhow::Result<()> {
+            pinger_sender.send(id, config.measurement_type, reflector_peers_lock_clone)
+        },
+    )?;
 
     let mut threads = vec![receiver_handle, sender_handle, baseliner_handle];
 
@@ -190,21 +141,12 @@ fn main() -> ExitCode {
         };
         let reselection_handle = thread::Builder::new()
             .name("reselection".to_string())
-            .spawn(move || reflector_selector.run())
-            .expect("Couldn't spawn reflector selector thread");
+            .spawn(move || reflector_selector.run())?;
         threads.push(reselection_handle);
     }
 
     // Sleep 10 seconds before we start adjusting speeds
     sleep(Duration::new(10, 0));
-
-    let ratecontroller = Ratecontroller {
-        config: config.clone(),
-        owd_baseline: owd_baseline.clone(),
-        owd_recent: owd_recent.clone(),
-        reflectors_lock: reflector_peers_lock.clone(),
-        reselect_trigger: reselect_sender.clone(),
-    };
 
     let dl_direction;
     let ul_direction;
@@ -224,6 +166,16 @@ fn main() -> ExitCode {
         ul_direction = StatsDirection::TX;
     }
 
+    let ratecontroller = Ratecontroller::new(
+        config.clone(),
+        owd_baseline.clone(),
+        owd_recent.clone(),
+        reflector_peers_lock.clone(),
+        reselect_sender.clone(),
+        dl_direction,
+        ul_direction,
+    )?;
+
     debug!(
         "Download direction: {}:{:?}",
         config.download_interface, dl_direction
@@ -236,14 +188,13 @@ fn main() -> ExitCode {
 
     let ratecontroller_handle = thread::Builder::new()
         .name("ratecontroller".to_string())
-        .spawn(move || ratecontroller.run(dl_direction, ul_direction))
-        .expect("Couldn't spawn ratecontroller thread");
+        .spawn(move || ratecontroller.run(dl_direction, ul_direction))?;
 
     threads.push(ratecontroller_handle);
 
     for thread in threads {
-        thread.join().unwrap();
+        thread.join().expect("Error happened in thread")?;
     }
 
-    ExitCode::SUCCESS
+    Ok(())
 }

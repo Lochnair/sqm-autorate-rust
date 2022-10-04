@@ -1,5 +1,6 @@
 use crate::pinger::PingReply;
-use crate::{Config, Utils};
+use crate::utils::Utils;
+use crate::Config;
 use log::info;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -22,7 +23,7 @@ pub struct Baseliner {
 }
 
 impl Baseliner {
-    pub fn run(&self) {
+    pub fn run(&self) -> anyhow::Result<()> {
         /*
          * 135 seconds to decay to 50% for the slow factor and
          * 0.4 seconds to decay to 50% for the fast factor.
@@ -35,7 +36,7 @@ impl Baseliner {
         let fast_factor = Utils::ewma_factor(self.config.tick_interval, 0.4);
 
         loop {
-            let time_data = self.stats_receiver.recv().unwrap();
+            let time_data = self.stats_receiver.recv()?;
 
             let mut owd_baseline_map = self.owd_baseline.lock().unwrap();
             let mut owd_recent_map = self.owd_recent.lock().unwrap();
@@ -84,6 +85,8 @@ impl Baseliner {
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
                     time_data.reflector
                 );
+                // If reselection is disabled this would trigger an error
+                // so just ignore the result
                 let _ = self.reselect_trigger.send(true);
             } else {
                 owd_baseline.down_ewma = owd_baseline.down_ewma * slow_factor

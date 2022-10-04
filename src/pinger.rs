@@ -1,17 +1,31 @@
 use crate::MeasurementType;
+use etherparse::ReadError;
 use log::{debug, error};
+use nix::errno::Errno;
 use nix::sys::socket::{
     recvfrom, sendto, socket, AddressFamily, MsgFlags, SockFlag, SockProtocol, SockType,
     SockaddrIn, SockaddrIn6, SockaddrLike,
 };
-use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::os::unix::io::RawFd;
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
-use std::thread;
 use std::time::Duration;
+use std::{io, thread};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum PingError {
+    #[error("Couldn't parse number")]
+    InvalidNumber(#[from] io::Error),
+    #[error("Error parsing packet")]
+    InvalidPacket(#[from] ReadError),
+    #[error("Socket error")]
+    Socket(#[from] Errno),
+    #[error("Wrong ICMP identifier (expected {expected:?}, found {found:?})")]
+    WrongID { expected: u16, found: u16 },
+}
 
 #[allow(dead_code)]
 pub struct PingReply {
@@ -58,7 +72,7 @@ pub trait PingListener {
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_sender: Sender<PingReply>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> anyhow::Result<()> {
         let socket = open_socket(type_)?;
 
         loop {
@@ -98,12 +112,7 @@ pub trait PingListener {
         }
     }
 
-    fn parse_packet(
-        &self,
-        id: u16,
-        reflector: IpAddr,
-        buf: &[u8],
-    ) -> Result<PingReply, Box<dyn Error>>;
+    fn parse_packet(&self, id: u16, reflector: IpAddr, buf: &[u8]) -> Result<PingReply, PingError>;
 }
 
 pub trait PingSender {
@@ -112,7 +121,7 @@ pub trait PingSender {
         id: u16,
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> anyhow::Result<()> {
         let socket = open_socket(type_)?;
 
         let mut seq: u16 = 0;
