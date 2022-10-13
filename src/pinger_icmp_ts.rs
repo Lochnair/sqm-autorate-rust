@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use crate::endian::ToNativeEndian;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::utils::Utils;
 use etherparse::icmpv4::TimestampMessage;
@@ -30,9 +31,9 @@ impl PingListener for PingerICMPTimestampListener {
                         let time_since_midnight: i64 = (time_now.tv_sec() as i64 % 86400 * 1000)
                             + (time_now.tv_nsec() as i64 / 1000000);
 
-                        let originate_timestamp = Utils::to_ne(reply.originate_timestamp);
-                        let receive_timestamp = Utils::to_ne(reply.receive_timestamp);
-                        let transmit_timestamp = Utils::to_ne(reply.transmit_timestamp);
+                        let originate_timestamp = reply.originate_timestamp.to_ne();
+                        let receive_timestamp = reply.receive_timestamp.to_ne();
+                        let transmit_timestamp = reply.transmit_timestamp.to_ne();
 
                         let rtt: i64 = time_since_midnight - originate_timestamp as i64;
                         let dl_time: i64 = time_since_midnight - transmit_timestamp as i64;

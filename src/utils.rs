@@ -21,14 +21,4 @@ impl Utils {
         let time = clock_gettime(ClockId::CLOCK_MONOTONIC)?;
         Ok((time.tv_sec() as f64, time.tv_nsec() as f64))
     }
-
-    #[cfg(target_endian = "big")]
-    pub fn to_ne(val: u64) -> u64 {
-        val.to_be()
-    }
-
-    #[cfg(target_endian = "little")]
-    pub fn to_ne(val: u32) -> u32 {
-        val.to_le()
-    }
 }
