@@ -10,6 +10,7 @@ use neli::socket::NlSocketHandle;
 use neli::types::{Buffer, RtBuffer};
 use serde::Deserialize;
 use std::io;
+use std::str::Utf8Error;
 use thiserror::Error;
 
 use bincode::deserialize;
@@ -39,6 +40,9 @@ pub enum NetlinkError {
 
     #[error("Serialization error")]
     Serialization(#[from] SerError),
+
+    #[error("Error happened while parsing UTF-8 string")]
+    Utf8Error(#[from] Utf8Error),
 
     #[error("Invalid Rtm type (expected {expected:?}, found {found:?})")]
     WrongType { expected: Rtm, found: Rtm },
@@ -214,9 +218,8 @@ impl Netlink {
                     for attr in p.rtattrs.iter() {
                         if attr.rta_type == Tca::Kind {
                             let buff = attr.rta_payload.as_ref();
-                            _type = std::str::from_utf8(buff)
-                                .expect("Found invalid UTF-8 string")
-                                .trim_end_matches('\0'); // Null terminator is valid UTF-8, but breaks comparison, so we remove it
+                            _type = std::str::from_utf8(buff)?.trim_end_matches('\0');
+                            // Null terminator is valid UTF-8, but breaks comparison, so we remove it
                         }
                     }
 
