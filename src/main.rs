@@ -166,14 +166,12 @@ fn main() -> anyhow::Result<()> {
         ul_direction = StatsDirection::TX;
     }
 
-    let ratecontroller = Ratecontroller::new(
+    let mut ratecontroller = Ratecontroller::new(
         config.clone(),
         owd_baseline.clone(),
         owd_recent.clone(),
         reflector_peers_lock.clone(),
         reselect_sender.clone(),
-        dl_direction,
-        ul_direction,
     )?;
 
     debug!(

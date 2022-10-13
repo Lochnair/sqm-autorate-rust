@@ -15,13 +15,16 @@ use std::thread::sleep;
 use std::time::Duration;
 use thiserror::Error;
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+enum Direction {
+    Down,
+    Up,
+}
+
 #[derive(Debug, Error)]
 pub enum RatecontrolError {
     #[error("Netlink error")]
     Netlink(#[from] NetlinkError),
-
-    #[error("Error sorting")]
-    Sorting,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -41,7 +44,7 @@ fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
 }
 
 fn get_interface_stats(
-    config: Config,
+    config: &Config,
     down_direction: StatsDirection,
     up_direction: StatsDirection,
 ) -> Result<(i128, i128), RatecontrolError> {
@@ -67,11 +70,17 @@ fn get_interface_stats(
 struct State {
     current_bytes: i128,
     current_rate: f64,
+    delta_stat: f64,
+    deltas: Vec<f64>,
     qdisc: Qdisc,
+    load: f64,
+    next_rate: f64,
+    now_t: f64,
     nrate: usize,
     previous_bytes: i128,
+    previous_bytes_t: f64,
     safe_rates: Vec<f64>,
-    stats_direction: StatsDirection,
+    utilisation: f64,
 }
 
 pub struct Ratecontroller {
@@ -86,8 +95,128 @@ pub struct Ratecontroller {
 }
 
 impl Ratecontroller {
-    fn adjust_rate(&self) -> anyhow::Result<()> {
+    fn calculate_rate(&mut self, direction: Direction) -> anyhow::Result<()> {
+        let (base_rate, delay_ms, min_rate, state) = if direction == Direction::Down {
+            (
+                self.config.download_base_kbits,
+                self.config.download_delay_ms,
+                self.config.download_min_kbits,
+                &mut self.state_dl,
+            )
+        } else {
+            (
+                self.config.upload_base_kbits,
+                self.config.upload_delay_ms,
+                self.config.upload_min_kbits,
+                &mut self.state_ul,
+            )
+        };
+
+        debug!("direction: {:?} -> state: {:#?}", direction, state);
+
+        if state.deltas.len() > 0 {
+            state.next_rate = state.current_rate;
+
+            if state.deltas.len() < 3 {
+                state.next_rate = min_rate;
+            } else {
+                state.delta_stat = Utils::a_else_b(state.deltas[2], state.deltas[0]);
+
+                if state.delta_stat > 0.0 {
+                    /*
+                     * TODO - find where the (8 / 1000) comes from and
+                     *    i. convert to a pre-computed factor
+                     *    ii. ideally, see if it can be defined in terms of constants, eg ticks per second and number of active reflectors
+                     */
+                    state.utilisation = (8.0 / 1000.0)
+                        * (state.current_bytes as f64 - state.previous_bytes as f64)
+                        / (state.now_t - state.previous_bytes_t);
+                    state.load = state.utilisation / state.current_rate;
+
+                    if state.delta_stat > 0.0
+                        && state.delta_stat < delay_ms
+                        && state.load > self.config.high_load_level
+                    {
+                        state.safe_rates[state.nrate] = (state.current_rate * state.load).round();
+                        let max_rate = state
+                            .safe_rates
+                            .iter()
+                            .max_by(|a, b| a.total_cmp(b))
+                            .unwrap();
+                        state.next_rate = state.current_rate
+                            * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
+                            + (base_rate * 0.03);
+                        state.nrate = state.nrate + 1;
+                        state.nrate = state.nrate % self.config.speed_hist_size as usize;
+                    }
+
+                    if state.delta_stat > delay_ms {
+                        let mut rng = thread_rng();
+                        match state.safe_rates.choose(&mut rng) {
+                            Some(rnd_rate) => {
+                                state.next_rate =
+                                    rnd_rate.min(0.9 * state.current_rate * state.load);
+                            }
+                            None => {
+                                state.next_rate = 0.9 * state.current_rate * state.load;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        state.previous_bytes_t = state.now_t;
+        state.previous_bytes = state.current_bytes;
+
+        state.next_rate = state.next_rate.max(min_rate).round();
+
         Ok(())
+    }
+
+    fn update_deltas(&mut self, now_abstime: f64) {
+        let state_dl = &mut self.state_dl;
+        let state_ul = &mut self.state_ul;
+
+        state_dl.deltas.clear();
+        state_ul.deltas.clear();
+
+        let owd_baseline = self.owd_baseline.lock().unwrap();
+        let owd_recent = self.owd_recent.lock().unwrap();
+        let reflectors = self.reflectors_lock.read().unwrap();
+
+        for reflector in reflectors.iter() {
+            // only consider this data if it's less than 2 * tick_duration seconds old
+            if owd_baseline.contains_key(reflector)
+                && owd_recent.contains_key(reflector)
+                && owd_recent[reflector].last_receive_time_s
+                    > now_abstime - 2.0 * self.config.tick_interval
+            {
+                state_dl
+                    .deltas
+                    .push(owd_recent[reflector].down_ewma - owd_baseline[reflector].down_ewma);
+                state_ul
+                    .deltas
+                    .push(owd_recent[reflector].up_ewma - owd_baseline[reflector].up_ewma);
+
+                debug!(
+                    "Reflector: {} down_delay: {} up_delay: {}",
+                    reflector,
+                    state_dl.deltas.last().unwrap(),
+                    state_ul.deltas.last().unwrap()
+                );
+            }
+        }
+
+        // sort owd's lowest to highest
+        state_dl.deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        state_ul.deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        if state_dl.deltas.len() < 5 || state_ul.deltas.len() < 5 {
+            // trigger reselection
+            warn!("Not enough delta values, triggering reselection");
+            let _ = self.reselect_trigger.send(true);
+        }
     }
 
     pub fn new(
@@ -96,8 +225,6 @@ impl Ratecontroller {
         owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         reselect_trigger: Sender<bool>,
-        down_direction: StatsDirection,
-        up_direction: StatsDirection,
     ) -> anyhow::Result<Self> {
         let dl_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
         let dl_safe_rates =
@@ -115,26 +242,38 @@ impl Ratecontroller {
             state_dl: State {
                 current_bytes: 0,
                 current_rate: 0.0,
-                qdisc: dl_qdisc,
+                delta_stat: 0.0,
+                deltas: Vec::new(),
+                load: 0.0,
+                next_rate: 0.0,
+                now_t: 0.0,
                 nrate: 0,
+                qdisc: dl_qdisc,
                 previous_bytes: 0,
+                previous_bytes_t: 0.0,
                 safe_rates: dl_safe_rates,
-                stats_direction: down_direction,
+                utilisation: 0.0,
             },
             state_ul: State {
                 current_bytes: 0,
                 current_rate: 0.0,
-                qdisc: ul_qdisc,
+                delta_stat: 0.0,
+                deltas: Vec::new(),
+                load: 0.0,
+                next_rate: 0.0,
+                now_t: 0.0,
                 nrate: 0,
+                qdisc: ul_qdisc,
                 previous_bytes: 0,
+                previous_bytes_t: 0.0,
                 safe_rates: ul_safe_rates,
-                stats_direction: up_direction,
+                utilisation: 0.0,
             },
         })
     }
 
     pub fn run(
-        &self,
+        &mut self,
         down_direction: StatsDirection,
         up_direction: StatsDirection,
     ) -> anyhow::Result<()> {
@@ -147,33 +286,18 @@ impl Ratecontroller {
         let mut lastchg_t = lastchg_s - start_s + lastchg_ns / 1e9;
         let mut lastdump_t = lastchg_t - 310.0;
 
-        let mut rng = thread_rng();
-
-        let down_qdisc = Netlink::qdisc_from_ifname(self.config.download_interface.as_str())?;
-        let up_qdisc = Netlink::qdisc_from_ifname(self.config.upload_interface.as_str())?;
-
         // set qdisc rates to 60% of base rate to make sure we start with sane baselines
-        let mut cur_dl_rate: f64 = self.config.download_base_kbits * 0.6;
-        let mut cur_ul_rate: f64 = self.config.upload_base_kbits * 0.6;
-        Netlink::set_qdisc_rate(down_qdisc, cur_dl_rate.round() as u64)?;
-        Netlink::set_qdisc_rate(up_qdisc, cur_ul_rate.round() as u64)?;
+        self.state_dl.current_rate = self.config.download_base_kbits * 0.6;
+        self.state_ul.current_rate = self.config.upload_base_kbits * 0.6;
 
-        let (mut prev_rx_bytes, mut prev_tx_bytes) =
-            get_interface_stats(self.config.clone(), down_direction, up_direction)?;
-
-        if prev_rx_bytes == -1 || prev_tx_bytes == -1 {
-            panic!("Couldn't retrieve stats from interface.");
-        }
-
-        let mut t_prev_bytes = lastchg_t;
-
-        let mut safe_dl_rates: Vec<f64> =
-            generate_initial_speeds(self.config.download_base_kbits, self.config.speed_hist_size);
-        let mut safe_ul_rates: Vec<f64> =
-            generate_initial_speeds(self.config.upload_base_kbits, self.config.speed_hist_size);
-
-        let mut nrate_up = 0;
-        let mut nrate_down = 0;
+        Netlink::set_qdisc_rate(
+            self.state_dl.qdisc,
+            self.state_dl.current_rate.round() as u64,
+        )?;
+        Netlink::set_qdisc_rate(
+            self.state_ul.qdisc,
+            self.state_ul.current_rate.round() as u64,
+        )?;
 
         let mut speed_hist_fd: Option<File> = None;
         let mut speed_hist_fd_inner: File;
@@ -205,6 +329,8 @@ impl Ratecontroller {
         }
 
         loop {
+            sleep(sleep_time);
+
             let (mut now_s, now_ns) = Utils::get_current_time()?;
             let now_abstime = now_s + now_ns / 1e9;
             now_s = now_s - start_s;
@@ -213,214 +339,76 @@ impl Ratecontroller {
             if now_t - lastchg_t > self.config.min_change_interval {
                 // if it's been long enough, and the stats indicate needing to change speeds
                 // change speeds here
-                let owd_baseline = self.owd_baseline.lock().unwrap();
-                let owd_recent = self.owd_recent.lock().unwrap();
-                let reflectors = self.reflectors_lock.read().unwrap();
 
-                let mut down_delta_stat: f64;
-                let mut up_delta_stat: f64;
+                (self.state_dl.current_bytes, self.state_ul.current_bytes) =
+                    get_interface_stats(&self.config, down_direction, up_direction)?;
+                if self.state_dl.current_bytes == -1 || self.state_ul.current_bytes == -1 {
+                    warn!(
+                    "One or both Netlink stats could not be read. Skipping rate control algorithm");
+                    continue;
+                }
 
-                // If we have no reflector peers to iterate over, don't attempt any rate changes.
-                // This will occur under normal operation when the reflector peers table is updated.
-                if reflectors.len() > 0 {
-                    let mut down_deltas = Vec::new();
-                    let mut up_deltas = Vec::new();
-                    let (
-                        mut next_dl_rate,
-                        mut next_ul_rate,
-                        mut rx_load,
-                        mut tx_load,
-                        up_utilisation,
-                        down_utilisation,
-                    ): (f64, f64, f64, f64, f64, f64);
+                self.state_dl.now_t = now_t;
+                self.state_ul.now_t = now_t;
+                self.update_deltas(now_abstime);
+                self.calculate_rate(Direction::Down)?;
+                self.calculate_rate(Direction::Up)?;
 
-                    rx_load = -1.0;
-                    tx_load = -1.0;
-                    down_delta_stat = 0.0;
-                    up_delta_stat = 0.0;
+                if self.state_dl.next_rate != self.state_dl.current_rate
+                    || self.state_ul.next_rate != self.state_ul.current_rate
+                {
+                    info!(
+                        "self.state_ul.next_rate {} self.state_dl.next_rate {}",
+                        self.state_ul.next_rate, self.state_dl.next_rate
+                    );
+                }
 
-                    for reflector in reflectors.iter() {
-                        // only consider this data if it's less than 2 * tick_duration seconds old
-                        if owd_baseline.contains_key(reflector)
-                            && owd_recent.contains_key(reflector)
-                            && owd_recent[reflector].last_receive_time_s
-                                > now_abstime - 2.0 * self.config.tick_interval
-                        {
-                            down_deltas.push(
-                                owd_recent[reflector].down_ewma - owd_baseline[reflector].down_ewma,
-                            );
-                            up_deltas.push(
-                                owd_recent[reflector].up_ewma - owd_baseline[reflector].up_ewma,
-                            );
+                if self.state_dl.next_rate != self.state_dl.current_rate {
+                    Netlink::set_qdisc_rate(self.state_dl.qdisc, self.state_dl.next_rate as u64)?;
+                }
 
-                            debug!(
-                                "Reflector: {} down_delay: {} up_delay: {}",
-                                reflector,
-                                down_deltas.last().unwrap(),
-                                up_deltas.last().unwrap()
-                            );
-                        }
-                    }
+                if self.state_ul.next_rate != self.state_ul.current_rate {
+                    Netlink::set_qdisc_rate(self.state_ul.qdisc, self.state_ul.next_rate as u64)?;
+                }
 
-                    if down_deltas.len() < 5 || up_deltas.len() < 5 {
-                        // trigger reselection
-                        warn!("Not enough delta values, triggering reselection");
-                        let _ = self.reselect_trigger.send(true);
-                    }
+                self.state_dl.current_rate = self.state_dl.next_rate;
+                self.state_ul.current_rate = self.state_ul.next_rate;
 
-                    next_dl_rate = cur_dl_rate;
-                    next_ul_rate = cur_ul_rate;
+                (lastchg_s, lastchg_ns) = Utils::get_current_time()?;
 
-                    let (cur_rx_bytes, cur_tx_bytes) =
-                        get_interface_stats(self.config.clone(), down_direction, up_direction)?;
-                    if cur_rx_bytes == -1 || cur_tx_bytes == -1 {
-                        warn!("One or both Netlink stats could not be read. Skipping rate control algorithm");
-                    } else if down_deltas.len() < 3 || up_deltas.len() < 3 {
-                        next_dl_rate = self.config.download_min_kbits;
-                        next_ul_rate = self.config.upload_min_kbits;
-                    } else {
-                        down_deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                        up_deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                debug!(
+                    "{},{},{},{},{},{},{},{}",
+                    lastchg_s,
+                    lastchg_ns,
+                    self.state_dl.load,
+                    self.state_ul.load,
+                    self.state_dl.delta_stat,
+                    self.state_ul.delta_stat,
+                    self.state_dl.current_rate,
+                    self.state_ul.current_rate
+                );
 
-                        down_delta_stat = Utils::a_else_b(down_deltas[2], down_deltas[0]);
-                        up_delta_stat = Utils::a_else_b(up_deltas[2], up_deltas[0]);
-
-                        if down_delta_stat > 0.0 && up_delta_stat > 0.0 {
-                            /*
-                             * TODO - find where the (8 / 1000) comes from and
-                             *    i. convert to a pre-computed factor
-                             *    ii. ideally, see if it can be defined in terms of constants, eg ticks per second and number of active reflectors
-                             */
-                            down_utilisation = (8.0 / 1000.0)
-                                * (cur_rx_bytes as f64 - prev_rx_bytes as f64)
-                                / (now_t - t_prev_bytes);
-                            rx_load = down_utilisation / cur_dl_rate;
-                            up_utilisation = (8.0 / 1000.0)
-                                * (cur_tx_bytes as f64 - prev_tx_bytes as f64)
-                                / (now_t - t_prev_bytes);
-                            tx_load = up_utilisation / cur_ul_rate;
-                            next_ul_rate = cur_ul_rate;
-                            next_dl_rate = cur_dl_rate;
-
-                            if down_delta_stat > 0.0
-                                && down_delta_stat < self.config.download_delay_ms
-                                && rx_load > self.config.high_load_level
-                            {
-                                safe_dl_rates[nrate_down] = (cur_dl_rate * rx_load).floor();
-                                let max_dl =
-                                    safe_dl_rates.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
-                                next_dl_rate = cur_dl_rate
-                                    * (1.0 + 0.1 * (1.0 - cur_dl_rate / max_dl).max(0.0))
-                                    + (self.config.download_base_kbits * 0.03);
-                                nrate_down = nrate_down + 1;
-                                nrate_down = nrate_down % self.config.speed_hist_size as usize;
-                            }
-
-                            if up_delta_stat > 0.0
-                                && up_delta_stat < self.config.download_delay_ms
-                                && tx_load > self.config.high_load_level
-                            {
-                                safe_ul_rates[nrate_up] = (cur_ul_rate * tx_load).floor();
-                                let max_ul =
-                                    safe_ul_rates.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
-                                next_ul_rate = cur_ul_rate
-                                    * (1.0 + 0.1 * (1.0 - cur_ul_rate / max_ul).max(0.0))
-                                    + (self.config.download_base_kbits * 0.03);
-                                nrate_up = nrate_up + 1;
-                                nrate_up = nrate_up % self.config.speed_hist_size as usize;
-                            }
-
-                            if down_delta_stat > self.config.download_delay_ms {
-                                match safe_dl_rates.choose(&mut rng) {
-                                    Some(rnd_rate) => {
-                                        next_dl_rate = rnd_rate.min(0.9 * cur_dl_rate * rx_load);
-                                    }
-                                    None => {
-                                        next_dl_rate = 0.9 * cur_dl_rate * rx_load;
-                                    }
-                                }
-                            }
-
-                            if up_delta_stat > self.config.upload_delay_ms {
-                                match safe_ul_rates.choose(&mut rng) {
-                                    Some(rnd_rate) => {
-                                        next_ul_rate = rnd_rate.min(0.9 * cur_ul_rate * tx_load);
-                                    }
-                                    None => {
-                                        next_ul_rate = 0.9 * cur_ul_rate * tx_load;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    t_prev_bytes = now_t;
-                    prev_rx_bytes = cur_rx_bytes;
-                    prev_tx_bytes = cur_tx_bytes;
-
-                    next_dl_rate = next_dl_rate.max(self.config.download_min_kbits).round();
-                    next_ul_rate = next_ul_rate.max(self.config.upload_min_kbits).round();
-
-                    if next_dl_rate != cur_dl_rate || next_ul_rate != cur_ul_rate {
-                        info!(
-                            "next_ul_rate {} next_dl_rate {}",
-                            next_ul_rate, next_dl_rate
-                        );
-                    }
-
-                    if next_dl_rate != cur_dl_rate {
-                        Netlink::set_qdisc_rate(down_qdisc, next_dl_rate as u64)?;
-                    }
-
-                    if next_ul_rate != cur_ul_rate {
-                        Netlink::set_qdisc_rate(up_qdisc, next_ul_rate as u64)?;
-                    }
-
-                    cur_dl_rate = next_dl_rate;
-                    cur_ul_rate = next_ul_rate;
-
-                    (lastchg_s, lastchg_ns) = Utils::get_current_time()?;
-
-                    if rx_load > 0.0
-                        && tx_load > 0.0
-                        && down_delta_stat > 0.0
-                        && up_delta_stat > 0.0
-                    {
-                        debug!(
-                            "{},{},{},{},{},{},{},{}",
+                if let Some(ref mut fd) = stats_fd {
+                    if let Err(e) = fd.write(
+                        format!(
+                            "{},{},{},{},{},{},{},{}\n",
                             lastchg_s,
                             lastchg_ns,
-                            rx_load,
-                            tx_load,
-                            down_delta_stat,
-                            up_delta_stat,
-                            cur_dl_rate,
-                            cur_ul_rate
-                        );
-
-                        if let Some(ref mut fd) = stats_fd {
-                            if let Err(e) = fd.write(
-                                format!(
-                                    "{},{},{},{},{},{},{},{}\n",
-                                    lastchg_s,
-                                    lastchg_ns,
-                                    rx_load,
-                                    tx_load,
-                                    down_delta_stat,
-                                    up_delta_stat,
-                                    cur_dl_rate,
-                                    cur_ul_rate
-                                )
-                                .as_bytes(),
-                            ) {
-                                warn!("Failed to write statistics: {}", e);
-                            }
-                        }
+                            self.state_dl.load,
+                            self.state_ul.load,
+                            self.state_dl.delta_stat,
+                            self.state_ul.delta_stat,
+                            self.state_dl.current_rate,
+                            self.state_ul.current_rate
+                        )
+                        .as_bytes(),
+                    ) {
+                        warn!("Failed to write statistics: {}", e);
                     }
-
-                    lastchg_s = lastchg_s - start_s;
-                    lastchg_t = lastchg_s + lastchg_ns / 1e9;
                 }
+
+                lastchg_s = lastchg_s - start_s;
+                lastchg_t = lastchg_s + lastchg_ns / 1e9;
             }
 
             if let Some(ref mut fd) = speed_hist_fd {
@@ -429,7 +417,7 @@ impl Ratecontroller {
                         if let Err(e) = fd.write(
                             format!(
                                 "{},{},{},{}\n",
-                                now_t, i, safe_ul_rates[i], safe_dl_rates[i]
+                                now_t, i, self.state_ul.safe_rates[i], self.state_dl.safe_rates[i]
                             )
                             .as_bytes(),
                         ) {
@@ -440,8 +428,6 @@ impl Ratecontroller {
                     lastdump_t = now_t;
                 }
             }
-
-            sleep(sleep_time);
         }
     }
 }
