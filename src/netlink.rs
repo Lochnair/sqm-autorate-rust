@@ -25,7 +25,7 @@ pub enum NetlinkError {
     #[error("Netlink interface error")]
     NlInterfaceError(#[from] NlError<Rtm, Ifinfomsg>),
 
-    #[error("Netlink interface error")]
+    #[error("Something went wrong while finding qdisc")]
     NlQdiscError(#[from] NlError<Rtm, Tcmsg>),
 
     #[error("Couldn't find CAKE qdisc on interface `{0}`")]
