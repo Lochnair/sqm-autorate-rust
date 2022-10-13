@@ -5,21 +5,28 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.dev]
+codegen-units = 1
+lto = true
+opt-level = 's'
+
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = 'z'
+panic = "abort"
 strip = "symbols"
 
 
 [dependencies]
+anyhow = "1.0.65"
 bincode = "1.3.3"
 byteorder = "1.4.3"
 etherparse = "0.12.0"
 neli = "0.6.2"
 rand = "0.8.5"
 rust-uci = { version = "0.1.5", optional = true }
-static_init = "1.0.3"
+thiserror = "1.0.37"
 
 [dependencies.log]
 features = ["std"]
@@ -31,14 +38,14 @@ version = "0.25.0"
 
 [dependencies.serde]
 features = ["derive"]
-version = "1.0.144"
+version = "1.0.145"
 
 [dependencies.time]
 features = ["formatting", "macros"]
-version = "0.3.14"
+version = "0.3.15"
 
 [features]
 uci = ["dep:rust-uci"]
 
 [patch.crates-io]
-nix = { path = "../nix" }
+nix = { git = "https://github.com/Lochnair/nix", branch = "add-icmp_proto" }
