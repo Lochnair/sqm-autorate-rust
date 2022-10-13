@@ -305,8 +305,10 @@ dependencies = [
 [[package]]
 name = "nix"
 version = "0.25.0"
-source = "git+https://github.com/Lochnair/nix?branch=add-icmp_proto#19e59985cdca5ded0eac9ad30bcc8ff39219c097"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e322c04a9e3440c327fca7b6c8a63e6890a32fa2ad689db972425f07e0d22abb"
 dependencies = [
+ "autocfg",
  "bitflags",
  "cfg-if",
  "libc",
@@ -460,6 +462,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
 
 [[package]]
+name = "socket2"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "sqm-autorate-rust"
 version = "0.1.0"
 dependencies = [
@@ -473,6 +485,7 @@ dependencies = [
  "rand",
  "rust-uci",
  "serde",
+ "socket2",
  "thiserror",
  "time",
 ]

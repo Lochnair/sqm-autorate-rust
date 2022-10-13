@@ -26,6 +26,7 @@ etherparse = "0.12.0"
 neli = "0.6.2"
 rand = "0.8.5"
 rust-uci = { version = "0.1.5", optional = true }
+socket2 = { version = "0.4", features = ["all"] }
 thiserror = "1.0.37"
 
 [dependencies.log]
@@ -33,7 +34,7 @@ features = ["std"]
 version = "0.4.17"
 
 [dependencies.nix]
-features = ["net", "socket", "time"]
+features = ["time"]
 version = "0.25.0"
 
 [dependencies.serde]
@@ -46,6 +47,3 @@ version = "0.3.15"
 
 [features]
 uci = ["dep:rust-uci"]
-
-[patch.crates-io]
-nix = { git = "https://github.com/Lochnair/nix", branch = "add-icmp_proto" }
