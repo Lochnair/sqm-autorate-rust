@@ -21,6 +21,12 @@ pub enum PingError {
     InvalidNumber(#[from] io::Error),
     #[error("Error parsing packet")]
     InvalidPacket(#[from] ReadError),
+    #[error("Invalid protocol")]
+    InvalidProtocol(String),
+    #[error("Invalid packet type")]
+    InvalidType(String),
+    #[error("No transport")]
+    NoTransport,
     #[error("Socket error")]
     Socket(#[from] Errno),
     #[error("Wrong ICMP identifier (expected {expected:?}, found {found:?})")]
@@ -98,11 +104,9 @@ pub trait PingListener {
 
             let reply = match self.parse_packet(id, addr, buf) {
                 Ok(val) => val,
-                Err(e) => {
-                    error!(
-                        "Something went wrong while parsing packet: {}",
-                        e.to_string()
-                    );
+                Err(_) => {
+                    // parse_packet will throw an error if it's an unknown protocol etc.
+                    // so just quietly move on
                     continue;
                 }
             };

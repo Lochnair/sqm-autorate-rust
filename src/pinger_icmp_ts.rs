@@ -3,7 +3,7 @@ use std::net::IpAddr;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::utils::Utils;
 use etherparse::icmpv4::TimestampMessage;
-use etherparse::TransportSlice::Icmpv4;
+use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{Icmpv4Header, Icmpv4Type, SlicedPacket};
 use nix::time::{clock_gettime, ClockId};
 
@@ -52,12 +52,18 @@ impl PingListener for PingerICMPTimestampListener {
                                 + (time_now.tv_nsec() as f64 / 1e9),
                         });
                     }
-                    _ => {
-                        unimplemented!()
+                    type_ => {
+                        return Err(PingError::InvalidType(format!("{:?}", type_)));
                     }
                 },
-                _ => {
-                    unimplemented!()
+                Some(Icmpv6(slice)) => {
+                    return Err(PingError::InvalidType(format!("{:?}", slice)));
+                }
+                Some(type_) => {
+                    return Err(PingError::InvalidType(format!("{:?}", type_)));
+                }
+                None => {
+                    return Err(PingError::NoTransport);
                 }
             },
         }

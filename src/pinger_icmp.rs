@@ -51,15 +51,18 @@ impl PingListener for PingerICMPEchoListener {
                                 + (time_now.tv_nsec() as f64 / 1e9),
                         });
                     }
-                    _ => {
-                        todo!()
+                    type_ => {
+                        return Err(PingError::InvalidType(format!("{:?}", type_)));
                     }
                 },
-                Some(Icmpv6(_)) => {
-                    todo!()
+                Some(Icmpv6(slice)) => {
+                    return Err(PingError::InvalidProtocol(format!("{:?}", slice)));
                 }
-                _ => {
-                    unimplemented!()
+                Some(type_) => {
+                    return Err(PingError::InvalidProtocol(format!("{:?}", type_)));
+                }
+                None => {
+                    return Err(PingError::NoTransport);
                 }
             },
         }
