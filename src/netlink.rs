@@ -49,6 +49,7 @@ pub enum NetlinkError {
 }
 
 #[derive(Deserialize, Copy, Clone, Default, Debug)]
+#[repr(C)]
 pub struct RtnlLinkStats64 {
     pub rx_packets: u64,
     pub tx_packets: u64,
