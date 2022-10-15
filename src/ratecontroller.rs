@@ -114,8 +114,6 @@ impl Ratecontroller {
             )
         };
 
-        debug!("direction: {:?} -> state: {:#?}", direction, state);
-
         if !state.deltas.is_empty() {
             state.next_rate = state.current_rate;
 
