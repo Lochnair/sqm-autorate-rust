@@ -19,31 +19,28 @@ strip = "symbols"
 
 
 [dependencies]
-anyhow = "1.0.65"
-bincode = "1.3.3"
-byteorder = "1.4.3"
-etherparse = "0.12.0"
-neli = "0.6.2"
-rand = "0.8.5"
-rust-uci = { version = "0.1.5", optional = true }
+anyhow = "1.0"
+bincode = "1.3"
+byteorder = "1.4"
+etherparse = "0.12"
+neli = "0.6"
+rand = "0.8"
+rustix = { version = "0.35", features = ["fs", "thread", "time"] }
+rust-uci = { version = "0.1", optional = true }
 socket2 = { version = "0.4", features = ["all"] }
-thiserror = "1.0.37"
+thiserror = "1.0"
 
 [dependencies.log]
 features = ["std"]
-version = "0.4.17"
-
-[dependencies.nix]
-features = ["time"]
-version = "0.25.0"
+version = "0.4"
 
 [dependencies.serde]
 features = ["derive"]
-version = "1.0.145"
+version = "1.0"
 
 [dependencies.time]
 features = ["formatting", "macros"]
-version = "0.3.15"
+version = "0.3"
 
 [features]
 uci = ["dep:rust-uci"]
