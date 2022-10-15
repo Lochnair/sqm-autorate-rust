@@ -3,6 +3,7 @@ extern crate core;
 mod baseliner;
 mod cake;
 mod config;
+mod endian;
 mod log;
 mod netlink;
 mod pinger;
