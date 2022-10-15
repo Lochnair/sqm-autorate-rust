@@ -15,7 +15,7 @@ impl PingListener for PingerICMPTimestampListener {
     // Result: RTT, down time, up time
     fn parse_packet(&self, id: u16, reflector: IpAddr, buf: &[u8]) -> Result<PingReply, PingError> {
         match SlicedPacket::from_ip(buf) {
-            Err(err) => return Err(PingError::InvalidPacket(err)),
+            Err(err) => Err(PingError::InvalidPacket(err)),
             Ok(value) => match value.transport {
                 Some(Icmpv4(icmp)) => match icmp.icmp_type() {
                     Icmpv4Type::TimestampReply(reply) => {
@@ -37,7 +37,7 @@ impl PingListener for PingerICMPTimestampListener {
                         let dl_time: i64 = time_since_midnight - transmit_timestamp as i64;
                         let ul_time: i64 = receive_timestamp as i64 - originate_timestamp as i64;
 
-                        return Ok(PingReply {
+                        Ok(PingReply {
                             reflector,
                             seq: reply.seq,
                             rtt,
@@ -49,21 +49,13 @@ impl PingListener for PingerICMPTimestampListener {
                             transmit_timestamp: transmit_timestamp as i64,
                             last_receive_time_s: time_now.get_seconds() as f64
                                 + (time_now.get_nanoseconds() as f64 / 1e9),
-                        });
+                        })
                     }
-                    type_ => {
-                        return Err(PingError::InvalidType(format!("{:?}", type_)));
-                    }
+                    type_ => Err(PingError::InvalidType(format!("{:?}", type_))),
                 },
-                Some(Icmpv6(slice)) => {
-                    return Err(PingError::InvalidType(format!("{:?}", slice)));
-                }
-                Some(type_) => {
-                    return Err(PingError::InvalidType(format!("{:?}", type_)));
-                }
-                None => {
-                    return Err(PingError::NoTransport);
-                }
+                Some(Icmpv6(slice)) => Err(PingError::InvalidType(format!("{:?}", slice))),
+                Some(type_) => Err(PingError::InvalidType(format!("{:?}", type_))),
+                None => Err(PingError::NoTransport),
             },
         }
     }

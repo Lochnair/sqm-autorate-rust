@@ -39,7 +39,7 @@ fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
     let mut rates = Vec::new();
 
     for _ in 0..size {
-        rates.push((rand::thread_rng().next_u64() as f64 * 0.2 + 0.75) * base_speed);
+        rates.push((thread_rng().next_u64() as f64 * 0.2 + 0.75) * base_speed);
     }
 
     rates
@@ -116,7 +116,7 @@ impl Ratecontroller {
 
         debug!("direction: {:?} -> state: {:#?}", direction, state);
 
-        if state.deltas.len() > 0 {
+        if !state.deltas.is_empty() {
             state.next_rate = state.current_rate;
 
             if state.deltas.len() < 3 {
@@ -148,8 +148,8 @@ impl Ratecontroller {
                         state.next_rate = state.current_rate
                             * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
                             + (base_rate * 0.03);
-                        state.nrate = state.nrate + 1;
-                        state.nrate = state.nrate % self.config.speed_hist_size as usize;
+                        state.nrate += 1;
+                        state.nrate %= self.config.speed_hist_size as usize;
                     }
 
                     if state.delta_stat > delay_ms {
@@ -314,7 +314,7 @@ impl Ratecontroller {
                 .write(true)
                 .open(self.config.speed_hist_file.as_str())?;
 
-            speed_hist_fd_inner.write("time,counter,upspeed,downspeed\n".as_bytes())?;
+            speed_hist_fd_inner.write_all("time,counter,upspeed,downspeed\n".as_bytes())?;
             speed_hist_fd_inner.flush()?;
 
             speed_hist_fd = Some(speed_hist_fd_inner);
@@ -324,7 +324,7 @@ impl Ratecontroller {
                 .write(true)
                 .open(self.config.stats_file.as_str())?;
 
-            stats_fd_inner.write(
+            stats_fd_inner.write_all(
                 "times,timens,rxload,txload,deltadelaydown,deltadelayup,dlrate,uprate\n".as_bytes(),
             )?;
             stats_fd_inner.flush()?;
@@ -338,7 +338,7 @@ impl Ratecontroller {
             let now = Clock::new(ClockId::Monotonic);
             let (mut now_s, now_ns) = (now.get_seconds() as f64, now.get_nanoseconds() as f64);
             let now_abstime = now_s + now_ns / 1e9;
-            now_s = now_s - start_s;
+            now_s -= start_s;
             let now_t = now_s + now_ns / 1e9;
 
             if now_t - lastchg_t > self.config.min_change_interval {
@@ -416,14 +416,14 @@ impl Ratecontroller {
                     }
                 }
 
-                lastchg_s = lastchg_s - start_s;
+                lastchg_s -= start_s;
                 lastchg_t = lastchg_s + lastchg_ns / 1e9;
             }
 
             if let Some(ref mut fd) = speed_hist_fd {
                 if now_t - lastdump_t > 300.0 {
                     for i in 0..self.config.speed_hist_size as usize {
-                        if let Err(e) = fd.write(
+                        if let Err(e) = fd.write_all(
                             format!(
                                 "{},{},{},{}\n",
                                 now_t, i, self.state_ul.safe_rates[i], self.state_dl.safe_rates[i]

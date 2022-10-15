@@ -99,7 +99,7 @@ impl ReflectorSelector {
             candidates.sort_by(|a, b| a.1.cmp(&b.1));
 
             // Now we will just limit the candidates down to 2 * num_reflectors
-            let mut num_reflectors = self.config.num_reflectors.clone();
+            let mut num_reflectors = self.config.num_reflectors;
             let candidate_pool_num = (2 * num_reflectors) as usize;
             candidates = candidates[0..candidate_pool_num - 1].to_vec();
 
@@ -108,7 +108,7 @@ impl ReflectorSelector {
             }
 
             // Shuffle the deck so we avoid overwhelming good reflectors (Fisher-Yates)
-            for i in (1 as usize..candidates.len()).rev() {
+            for i in (1_usize..candidates.len()).rev() {
                 let j = rng.gen_range(0..(i + 1));
                 candidates.swap(i, j);
             }

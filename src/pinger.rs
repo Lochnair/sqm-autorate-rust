@@ -40,12 +40,12 @@ pub struct PingReply {
     pub last_receive_time_s: f64,
 }
 
-fn open_socket(type_: MeasurementType) -> std::io::Result<Socket> {
+fn open_socket(type_: MeasurementType) -> io::Result<Socket> {
     match type_ {
-        MeasurementType::ICMP | MeasurementType::ICMPTimestamps => {
+        MeasurementType::Icmp | MeasurementType::IcmpTimestamps => {
             Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4))
         }
-        MeasurementType::NTP => Socket::new(Domain::IPV4, Type::DGRAM, None),
+        MeasurementType::Ntp => Socket::new(Domain::IPV4, Type::DGRAM, None),
         _ => {
             unimplemented!()
         }
@@ -131,20 +131,18 @@ pub trait PingSender {
             drop(reflectors_unlocked);
 
             for reflector in reflectors.iter() {
-                let addr: SockAddr;
-
-                match reflector.is_ipv4() {
+                let addr: SockAddr = match reflector.is_ipv4() {
                     true => {
                         let ip4 = Ipv4Addr::from_str(&*reflector.to_string()).unwrap();
                         let sock4 = SocketAddrV4::new(ip4, 0);
-                        addr = sock4.into();
+                        sock4.into()
                     }
                     false => {
                         let ip6 = Ipv6Addr::from_str(&*reflector.to_string()).unwrap();
                         let sock6 = SocketAddrV6::new(ip6, 0, 0, 0);
-                        addr = sock6.into();
+                        sock6.into()
                     }
-                }
+                };
 
                 let buf_v = self.craft_packet(id, seq);
                 let buf = buf_v.as_slice();
@@ -154,10 +152,10 @@ pub trait PingSender {
 
             thread::sleep(sleep_duration);
 
-            seq += 1;
-
-            if seq >= u16::MAX {
+            if seq == u16::MAX {
                 seq = 0;
+            } else {
+                seq += 1;
             }
         }
     }

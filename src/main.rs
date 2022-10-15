@@ -78,15 +78,15 @@ fn main() -> anyhow::Result<()> {
     let (reselect_sender, reselect_receiver) = channel();
 
     let (mut pinger_receiver, mut pinger_sender) = match config.measurement_type {
-        MeasurementType::ICMP => (
+        MeasurementType::Icmp => (
             Box::new(PingerICMPEchoListener {}) as Box<dyn PingListener + Send>,
             Box::new(PingerICMPEchoSender {}) as Box<dyn PingSender + Send>,
         ),
-        MeasurementType::ICMPTimestamps => (
+        MeasurementType::IcmpTimestamps => (
             Box::new(PingerICMPTimestampListener {}) as Box<dyn PingListener + Send>,
             Box::new(PingerICMPTimestampSender {}) as Box<dyn PingSender + Send>,
         ),
-        MeasurementType::NTP | MeasurementType::TCPTimestamps => {
+        MeasurementType::Ntp | MeasurementType::TcpTimestamps => {
             todo!()
         }
     };
@@ -150,30 +150,27 @@ fn main() -> anyhow::Result<()> {
     // Sleep 10 seconds before we start adjusting speeds
     sleep(Duration::new(10, 0));
 
-    let dl_direction;
-    let ul_direction;
-
-    if config.download_interface.starts_with("ifb") || config.download_interface.starts_with("veth")
+    let dl_direction = if config.download_interface.starts_with("ifb")
+        || config.download_interface.starts_with("veth")
     {
-        dl_direction = StatsDirection::TX;
-    } else if config.download_interface == "br-lan" {
-        dl_direction = StatsDirection::RX;
+        StatsDirection::TX
     } else {
-        dl_direction = StatsDirection::RX;
-    }
-
-    if config.upload_interface.starts_with("ifb") || config.upload_interface.starts_with("veth") {
-        ul_direction = StatsDirection::RX;
+        StatsDirection::RX
+    };
+    let ul_direction = if config.upload_interface.starts_with("ifb")
+        || config.upload_interface.starts_with("veth")
+    {
+        StatsDirection::RX
     } else {
-        ul_direction = StatsDirection::TX;
-    }
+        StatsDirection::TX
+    };
 
     let mut ratecontroller = Ratecontroller::new(
         config.clone(),
-        owd_baseline.clone(),
-        owd_recent.clone(),
-        reflector_peers_lock.clone(),
-        reselect_sender.clone(),
+        owd_baseline,
+        owd_recent,
+        reflector_peers_lock,
+        reselect_sender,
     )?;
 
     debug!(

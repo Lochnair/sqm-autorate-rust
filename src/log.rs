@@ -13,7 +13,7 @@ const LOG_DATETIME_FORMAT: &[FormatItem] = format_description!(
 
 #[derive(Clone, Copy)]
 pub struct SimpleLogger {
-    pub level: log::Level,
+    pub level: Level,
 }
 
 fn time_format<T>(dt: T, format: &(impl Formattable + ?Sized)) -> String

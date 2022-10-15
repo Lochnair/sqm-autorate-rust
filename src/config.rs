@@ -33,10 +33,10 @@ where
 
 #[derive(Clone, Copy, Debug)]
 pub enum MeasurementType {
-    ICMP = 1,
-    ICMPTimestamps,
-    NTP,
-    TCPTimestamps,
+    Icmp = 1,
+    IcmpTimestamps,
+    Ntp,
+    TcpTimestamps,
 }
 
 impl FromStr for MeasurementType {
@@ -44,10 +44,10 @@ impl FromStr for MeasurementType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         return match s.to_lowercase().as_str() {
-            "icmp" => Ok(MeasurementType::ICMP),
-            "icmp-timestamps" => Ok(MeasurementType::ICMPTimestamps),
-            "ntp" => Ok(MeasurementType::NTP),
-            "tcp-timestamps" => Ok(MeasurementType::TCPTimestamps),
+            "icmp" => Ok(MeasurementType::Icmp),
+            "icmp-timestamps" => Ok(MeasurementType::IcmpTimestamps),
+            "ntp" => Ok(MeasurementType::Ntp),
+            "tcp-timestamps" => Ok(MeasurementType::TcpTimestamps),
             &_ => Err(ConfigError::InvalidMeasurementType(s.to_string())),
         };
     }
@@ -150,7 +150,7 @@ impl Config {
             measurement_type: Self::get::<MeasurementType>(
                 "SQMA_MEASUREMENT_TYPE",
                 "sqm-autorate.@advanced_settings[0].measurement_type",
-                Some(MeasurementType::ICMPTimestamps),
+                Some(MeasurementType::IcmpTimestamps),
             )?,
             min_change_interval: Self::get::<f64>(
                 "SQMA_MIN_CHANGE_INTERVAL",
@@ -185,25 +185,19 @@ impl Config {
         })
     }
 
-    fn get<T: std::str::FromStr>(
-        env_key: &str,
-        uci_key: &str,
-        default: Option<T>,
-    ) -> Result<T, ConfigError> {
-        return match Self::get_value(env_key, uci_key) {
+    fn get<T: FromStr>(env_key: &str, uci_key: &str, default: Option<T>) -> Result<T, ConfigError> {
+        match Self::get_value(env_key, uci_key) {
             Some(val) => match val.parse::<T>() {
                 Ok(parsed_val) => Ok(parsed_val),
                 // Ran into an compilation error while trying to return the
                 // error as-is, so using my own error type to indicate something went wrong while parsing
                 Err(_) => Err(ConfigError::ParseError(env_key.to_string())),
             },
-            None => {
-                return match default {
-                    Some(val) => Ok(val),
-                    None => Err(ConfigError::MissingValue(env_key.to_string())),
-                }
-            }
-        };
+            None => match default {
+                Some(val) => Ok(val),
+                None => Err(ConfigError::MissingValue(env_key.to_string())),
+            },
+        }
     }
 
     fn get_value(env_key: &str, uci_key: &str) -> Option<String> {
@@ -256,7 +250,7 @@ impl Config {
             }
 
             let line = line?;
-            let columns: Vec<&str> = line.split(",").collect();
+            let columns: Vec<&str> = line.split(',').collect();
             reflectors.push(IpAddr::from_str(columns[0])?);
         }
 

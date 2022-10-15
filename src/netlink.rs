@@ -241,7 +241,7 @@ impl Netlink {
             }
         }
 
-        return Err(NetlinkError::NoQdiscFound(ifindex.to_string()));
+        Err(NetlinkError::NoQdiscFound(ifindex.to_string()))
     }
 
     pub fn qdisc_from_ifname(ifname: &str) -> Result<Qdisc, NetlinkError> {

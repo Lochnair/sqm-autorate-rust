@@ -15,7 +15,7 @@ impl PingListener for PingerICMPEchoListener {
     // Result: RTT, down time, up time
     fn parse_packet(&self, id: u16, reflector: IpAddr, buf: &[u8]) -> Result<PingReply, PingError> {
         match SlicedPacket::from_ip(buf) {
-            Err(err) => return Err(PingError::InvalidPacket(err)),
+            Err(err) => Err(PingError::InvalidPacket(err)),
             Ok(value) => match value.transport {
                 Some(Icmpv4(icmp)) => match icmp.icmp_type() {
                     Icmpv4Type::EchoReply(echo) => {
@@ -36,7 +36,7 @@ impl PingListener for PingerICMPEchoListener {
                         let time_ms = clock.to_milliseconds() as i64;
 
                         let rtt: i64 = time_ms - time_sent;
-                        return Ok(PingReply {
+                        Ok(PingReply {
                             reflector,
                             seq: echo.seq,
                             rtt,
@@ -48,21 +48,13 @@ impl PingListener for PingerICMPEchoListener {
                             transmit_timestamp: 0,
                             last_receive_time_s: clock.get_seconds() as f64
                                 + (clock.get_nanoseconds() as f64 / 1e9),
-                        });
+                        })
                     }
-                    type_ => {
-                        return Err(PingError::InvalidType(format!("{:?}", type_)));
-                    }
+                    type_ => Err(PingError::InvalidType(format!("{:?}", type_))),
                 },
-                Some(Icmpv6(slice)) => {
-                    return Err(PingError::InvalidProtocol(format!("{:?}", slice)));
-                }
-                Some(type_) => {
-                    return Err(PingError::InvalidProtocol(format!("{:?}", type_)));
-                }
-                None => {
-                    return Err(PingError::NoTransport);
-                }
+                Some(Icmpv6(slice)) => Err(PingError::InvalidProtocol(format!("{:?}", slice))),
+                Some(type_) => Err(PingError::InvalidProtocol(format!("{:?}", type_))),
+                None => Err(PingError::NoTransport),
             },
         }
     }
