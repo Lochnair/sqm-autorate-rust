@@ -1,7 +1,6 @@
 use crate::MeasurementType;
 use etherparse::ReadError;
 use log::{debug, error};
-use nix::errno::Errno;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::str::FromStr;
@@ -23,8 +22,6 @@ pub enum PingError {
     InvalidType(String),
     #[error("No transport")]
     NoTransport,
-    #[error("Socket error")]
-    Socket(#[from] Errno),
     #[error("Wrong ICMP identifier (expected {expected:?}, found {found:?})")]
     WrongID { expected: u16, found: u16 },
 }

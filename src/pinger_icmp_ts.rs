@@ -1,12 +1,11 @@
-use std::net::IpAddr;
-
+use crate::clock::Clock;
 use crate::endian::ToNativeEndian;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
-use crate::utils::Utils;
 use etherparse::icmpv4::TimestampMessage;
 use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{Icmpv4Header, Icmpv4Type, SlicedPacket};
-use nix::time::{clock_gettime, ClockId};
+use rustix::thread::ClockId;
+use std::net::IpAddr;
 
 pub struct PingerICMPTimestampListener {}
 
@@ -27,9 +26,8 @@ impl PingListener for PingerICMPTimestampListener {
                             });
                         }
 
-                        let time_now = clock_gettime(ClockId::CLOCK_REALTIME).unwrap();
-                        let time_since_midnight: i64 = (time_now.tv_sec() as i64 % 86400 * 1000)
-                            + (time_now.tv_nsec() as i64 / 1000000);
+                        let time_now = Clock::new(ClockId::Realtime);
+                        let time_since_midnight = time_now.get_time_since_midnight();
 
                         let originate_timestamp = reply.originate_timestamp.to_ne();
                         let receive_timestamp = reply.receive_timestamp.to_ne();
@@ -49,8 +47,8 @@ impl PingListener for PingerICMPTimestampListener {
                             originate_timestamp: originate_timestamp as i64,
                             receive_timestamp: receive_timestamp as i64,
                             transmit_timestamp: transmit_timestamp as i64,
-                            last_receive_time_s: time_now.tv_sec() as f64
-                                + (time_now.tv_nsec() as f64 / 1e9),
+                            last_receive_time_s: time_now.get_seconds() as f64
+                                + (time_now.get_nanoseconds() as f64 / 1e9),
                         });
                     }
                     type_ => {
@@ -73,9 +71,7 @@ impl PingListener for PingerICMPTimestampListener {
 
 impl PingSender for PingerICMPTimestampSender {
     fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8> {
-        let time = clock_gettime(ClockId::CLOCK_REALTIME).unwrap();
-        let time_since_midnight: u32 =
-            ((time.tv_sec() % 86400 * 1000) + (time.tv_nsec() / 1000000)) as u32;
+        let time_since_midnight = Clock::new(ClockId::Realtime).get_time_since_midnight();
 
         let payload: [u8; 0] = [];
 
@@ -84,7 +80,7 @@ impl PingSender for PingerICMPTimestampSender {
             Icmpv4Type::TimestampRequest(TimestampMessage {
                 id,
                 seq,
-                originate_timestamp: time_since_midnight,
+                originate_timestamp: time_since_midnight as u32,
                 receive_timestamp: 0,
                 transmit_timestamp: 0,
             }),

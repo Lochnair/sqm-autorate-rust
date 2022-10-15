@@ -1,3 +1,4 @@
+use crate::clock::Clock;
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::utils::Utils;
 use crate::{Config, ReflectorStats};
@@ -5,6 +6,7 @@ use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use rand::RngCore;
+use rustix::thread::ClockId;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -281,8 +283,10 @@ impl Ratecontroller {
         let sleep_time_ns = ((self.config.min_change_interval % 1.0) * 1e9) as u32;
         let sleep_time = Duration::new(sleep_time_s, sleep_time_ns);
 
-        let (start_s, _) = Utils::get_current_time()?;
-        let (mut lastchg_s, mut lastchg_ns) = Utils::get_current_time()?;
+        let time = Clock::new(ClockId::Monotonic);
+        let start_s = time.get_seconds() as f64;
+        let (mut lastchg_s, mut lastchg_ns) =
+            (time.get_seconds() as f64, time.get_nanoseconds() as f64);
         let mut lastchg_t = lastchg_s - start_s + lastchg_ns / 1e9;
         let mut lastdump_t = lastchg_t - 310.0;
 
@@ -331,7 +335,8 @@ impl Ratecontroller {
         loop {
             sleep(sleep_time);
 
-            let (mut now_s, now_ns) = Utils::get_current_time()?;
+            let now = Clock::new(ClockId::Monotonic);
+            let (mut now_s, now_ns) = (now.get_seconds() as f64, now.get_nanoseconds() as f64);
             let now_abstime = now_s + now_ns / 1e9;
             now_s = now_s - start_s;
             let now_t = now_s + now_ns / 1e9;
@@ -374,7 +379,11 @@ impl Ratecontroller {
                 self.state_dl.current_rate = self.state_dl.next_rate;
                 self.state_ul.current_rate = self.state_ul.next_rate;
 
-                (lastchg_s, lastchg_ns) = Utils::get_current_time()?;
+                let lastchg = Clock::new(ClockId::Monotonic);
+                (lastchg_s, lastchg_ns) = (
+                    lastchg.get_seconds() as f64,
+                    lastchg.get_nanoseconds() as f64,
+                );
 
                 debug!(
                     "{},{},{},{},{},{},{},{}",

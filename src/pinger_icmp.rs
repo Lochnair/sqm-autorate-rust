@@ -1,11 +1,11 @@
 use std::net::IpAddr;
 
+use crate::clock::Clock;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use byteorder::*;
 use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{IcmpEchoHeader, Icmpv4Header, Icmpv4Type, SlicedPacket};
-use nix::sys::time::TimeValLike;
-use nix::time::{clock_gettime, ClockId};
+use rustix::thread::ClockId;
 
 pub struct PingerICMPEchoListener {}
 
@@ -32,11 +32,10 @@ impl PingListener for PingerICMPEchoListener {
                             .expect("Couldn't parse payload to time")
                             as i64;
 
-                        let time_now = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap();
+                        let clock = Clock::new(ClockId::Monotonic);
+                        let time_ms = clock.to_milliseconds() as i64;
 
-                        let time_ms = time_now.num_milliseconds();
-
-                        let rtt = time_ms - time_sent;
+                        let rtt: i64 = time_ms - time_sent;
                         return Ok(PingReply {
                             reflector,
                             seq: echo.seq,
@@ -47,8 +46,8 @@ impl PingListener for PingerICMPEchoListener {
                             originate_timestamp: 0,
                             receive_timestamp: 0,
                             transmit_timestamp: 0,
-                            last_receive_time_s: time_now.tv_sec() as f64
-                                + (time_now.tv_nsec() as f64 / 1e9),
+                            last_receive_time_s: clock.get_seconds() as f64
+                                + (clock.get_nanoseconds() as f64 / 1e9),
                         });
                     }
                     type_ => {
@@ -71,9 +70,9 @@ impl PingListener for PingerICMPEchoListener {
 
 impl PingSender for PingerICMPEchoSender {
     fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8> {
-        let time = clock_gettime(ClockId::CLOCK_MONOTONIC).unwrap();
-        let time_u64: u64 = time.num_milliseconds() as u64;
-        let payload = time_u64.to_ne_bytes();
+        let clock = Clock::new(ClockId::Monotonic);
+        let time_ms = clock.to_milliseconds();
+        let payload = time_ms.to_ne_bytes();
 
         // Construct a header with checksum based on the payload
         let hdr = Icmpv4Header::with_checksum(
