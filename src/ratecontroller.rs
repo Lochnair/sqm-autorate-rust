@@ -277,9 +277,7 @@ impl Ratecontroller {
         down_direction: StatsDirection,
         up_direction: StatsDirection,
     ) -> anyhow::Result<()> {
-        let sleep_time_s = self.config.min_change_interval.floor() as u64;
-        let sleep_time_ns = ((self.config.min_change_interval % 1.0) * 1e9) as u32;
-        let sleep_time = Duration::new(sleep_time_s, sleep_time_ns);
+        let sleep_time = Duration::from_secs_f64(self.config.min_change_interval);
 
         let time = Clock::new(ClockId::Monotonic);
         let start_s = time.get_seconds() as f64;
