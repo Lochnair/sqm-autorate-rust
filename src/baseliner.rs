@@ -1,5 +1,4 @@
 use crate::pinger::PingReply;
-use crate::utils::Utils;
 use crate::Config;
 use log::info;
 use std::collections::HashMap;
@@ -22,6 +21,10 @@ pub struct Baseliner {
     pub stats_receiver: Receiver<PingReply>,
 }
 
+fn ewma_factor(tick: f64, dur: f64) -> f64 {
+    ((0.5_f64).ln() / (dur / tick)).exp()
+}
+
 impl Baseliner {
     pub fn run(&self) -> anyhow::Result<()> {
         /*
@@ -32,8 +35,8 @@ impl Baseliner {
          * aren't bloat related, with less sensitivity (bigger numbers) we smooth through quick spikes
          * but take longer to respond to real bufferbloat
          */
-        let slow_factor = Utils::ewma_factor(self.config.tick_interval, 135.0);
-        let fast_factor = Utils::ewma_factor(self.config.tick_interval, 0.4);
+        let slow_factor = ewma_factor(self.config.tick_interval, 135.0);
+        let fast_factor = ewma_factor(self.config.tick_interval, 0.4);
 
         loop {
             let time_data = self.stats_receiver.recv()?;

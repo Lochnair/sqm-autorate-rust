@@ -1,6 +1,5 @@
 use crate::clock::Clock;
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
-use crate::utils::Utils;
 use crate::{Config, ReflectorStats};
 use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
@@ -120,7 +119,11 @@ impl Ratecontroller {
             if state.deltas.len() < 3 {
                 state.next_rate = min_rate;
             } else {
-                state.delta_stat = Utils::a_else_b(state.deltas[2], state.deltas[0]);
+                state.delta_stat = if state.deltas[2] > 0.0 {
+                    state.deltas[2]
+                } else {
+                    state.deltas[0]
+                };
 
                 if state.delta_stat > 0.0 {
                     /*

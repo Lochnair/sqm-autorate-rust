@@ -12,7 +12,6 @@ mod pinger_icmp;
 mod pinger_icmp_ts;
 mod ratecontroller;
 mod reflector_selector;
-mod utils;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
 use ::log::debug;
