@@ -86,13 +86,14 @@ struct State {
 
 pub struct Ratecontroller {
     config: Config,
+    down_direction: StatsDirection,
     owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
     reselect_trigger: Sender<bool>,
-
     state_dl: State,
     state_ul: State,
+    up_direction: StatsDirection,
 }
 
 impl Ratecontroller {
@@ -228,6 +229,8 @@ impl Ratecontroller {
         owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         reselect_trigger: Sender<bool>,
+        down_direction: StatsDirection,
+        up_direction: StatsDirection,
     ) -> anyhow::Result<Self> {
         let dl_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
         let dl_safe_rates =
@@ -236,8 +239,11 @@ impl Ratecontroller {
         let ul_safe_rates =
             generate_initial_speeds(config.upload_base_kbits, config.speed_hist_size);
 
+        let (cur_rx, cur_tx) = get_interface_stats(&config, down_direction, up_direction)?;
+
         Ok(Self {
             config,
+            down_direction,
             owd_baseline,
             owd_recent,
             reflectors_lock,
@@ -252,8 +258,8 @@ impl Ratecontroller {
                 now_t: 0.0,
                 nrate: 0,
                 qdisc: dl_qdisc,
-                previous_bytes: 0,
-                previous_bytes_t: 0.0,
+                previous_bytes: cur_rx,
+                prev_t: Instant::now(),
                 safe_rates: dl_safe_rates,
                 utilisation: 0.0,
             },
@@ -267,19 +273,16 @@ impl Ratecontroller {
                 now_t: 0.0,
                 nrate: 0,
                 qdisc: ul_qdisc,
-                previous_bytes: 0,
-                previous_bytes_t: 0.0,
+                previous_bytes: cur_tx,
+                prev_t: Instant::now(),
                 safe_rates: ul_safe_rates,
                 utilisation: 0.0,
             },
+            up_direction,
         })
     }
 
-    pub fn run(
-        &mut self,
-        down_direction: StatsDirection,
-        up_direction: StatsDirection,
-    ) -> anyhow::Result<()> {
+    pub fn run(&mut self) -> anyhow::Result<()> {
         let sleep_time = Duration::from_secs_f64(self.config.min_change_interval);
 
         let time = Time::new(ClockId::Monotonic);
@@ -345,7 +348,7 @@ impl Ratecontroller {
                 // change speeds here
 
                 (self.state_dl.current_bytes, self.state_ul.current_bytes) =
-                    get_interface_stats(&self.config, down_direction, up_direction)?;
+                    get_interface_stats(&self.config, self.down_direction, self.up_direction)?;
                 if self.state_dl.current_bytes == -1 || self.state_ul.current_bytes == -1 {
                     warn!(
                     "One or both Netlink stats could not be read. Skipping rate control algorithm");

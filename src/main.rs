@@ -170,6 +170,8 @@ fn main() -> anyhow::Result<()> {
         owd_recent,
         reflector_peers_lock,
         reselect_sender,
+        dl_direction,
+        ul_direction,
     )?;
 
     debug!(
@@ -184,7 +186,7 @@ fn main() -> anyhow::Result<()> {
 
     let ratecontroller_handle = thread::Builder::new()
         .name("ratecontroller".to_string())
-        .spawn(move || ratecontroller.run(dl_direction, ul_direction))?;
+        .spawn(move || ratecontroller.run())?;
 
     threads.push(ratecontroller_handle);
 
