@@ -26,7 +26,6 @@ pub enum PingError {
     WrongID { expected: u16, found: u16 },
 }
 
-#[allow(dead_code)]
 pub struct PingReply {
     pub reflector: IpAddr,
     pub seq: u16,
