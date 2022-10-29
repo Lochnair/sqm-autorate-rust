@@ -77,13 +77,9 @@ pub struct RtnlLinkStats64 {
     pub rx_nohandler: u64,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct Qdisc {
     ifindex: i32,
-    handle: u32,
-    family: u8,
-    refcnt: u32,
     parent: u32,
 }
 
@@ -229,9 +225,6 @@ impl Netlink {
                     if _type.eq(type_to_look_for) {
                         let qdisc = Qdisc {
                             ifindex: p.tcm_ifindex as i32,
-                            handle: p.tcm_handle,
-                            family: p.tcm_family,
-                            refcnt: p.tcm_info,
                             parent: p.tcm_parent,
                         };
 
