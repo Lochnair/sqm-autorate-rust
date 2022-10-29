@@ -1,5 +1,5 @@
-use crate::clock::Clock;
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
+use crate::time::Time;
 use crate::{Config, ReflectorStats};
 use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
@@ -282,7 +282,7 @@ impl Ratecontroller {
     ) -> anyhow::Result<()> {
         let sleep_time = Duration::from_secs_f64(self.config.min_change_interval);
 
-        let time = Clock::new(ClockId::Monotonic);
+        let time = Time::new(ClockId::Monotonic);
         let start_s = time.get_seconds() as f64;
         let (mut lastchg_s, mut lastchg_ns) =
             (time.get_seconds() as f64, time.get_nanoseconds() as f64);
@@ -334,7 +334,7 @@ impl Ratecontroller {
         loop {
             sleep(sleep_time);
 
-            let now = Clock::new(ClockId::Monotonic);
+            let now = Time::new(ClockId::Monotonic);
             let (mut now_s, now_ns) = (now.get_seconds() as f64, now.get_nanoseconds() as f64);
             let now_abstime = now_s + now_ns / 1e9;
             now_s -= start_s;

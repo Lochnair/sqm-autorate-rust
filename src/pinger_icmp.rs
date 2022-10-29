@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
-use crate::clock::Clock;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
+use crate::time::Time;
 use byteorder::*;
 use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{IcmpEchoHeader, Icmpv4Header, Icmpv4Type, SlicedPacket};
@@ -32,7 +32,7 @@ impl PingListener for PingerICMPEchoListener {
                             .expect("Couldn't parse payload to time")
                             as i64;
 
-                        let clock = Clock::new(ClockId::Monotonic);
+                        let clock = Time::new(ClockId::Monotonic);
                         let time_ms = clock.to_milliseconds() as i64;
 
                         let rtt: i64 = time_ms - time_sent;
@@ -62,7 +62,7 @@ impl PingListener for PingerICMPEchoListener {
 
 impl PingSender for PingerICMPEchoSender {
     fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8> {
-        let clock = Clock::new(ClockId::Monotonic);
+        let clock = Time::new(ClockId::Monotonic);
         let time_ms = clock.to_milliseconds();
         let payload = time_ms.to_ne_bytes();
 

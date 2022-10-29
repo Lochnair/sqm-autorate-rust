@@ -1,6 +1,6 @@
-use crate::clock::Clock;
 use crate::endian::ToNativeEndian;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
+use crate::time::Time;
 use etherparse::icmpv4::TimestampMessage;
 use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{Icmpv4Header, Icmpv4Type, SlicedPacket};
@@ -26,7 +26,7 @@ impl PingListener for PingerICMPTimestampListener {
                             });
                         }
 
-                        let time_now = Clock::new(ClockId::Realtime);
+                        let time_now = Time::new(ClockId::Realtime);
                         let time_since_midnight = time_now.get_time_since_midnight();
 
                         let originate_timestamp = reply.originate_timestamp.to_ne();
@@ -63,7 +63,7 @@ impl PingListener for PingerICMPTimestampListener {
 
 impl PingSender for PingerICMPTimestampSender {
     fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8> {
-        let time_since_midnight = Clock::new(ClockId::Realtime).get_time_since_midnight();
+        let time_since_midnight = Time::new(ClockId::Realtime).get_time_since_midnight();
 
         let payload: [u8; 0] = [];
 

@@ -2,12 +2,12 @@ use rustix::fs::Timespec;
 use rustix::thread::ClockId;
 use rustix::time::clock_gettime;
 
-pub struct Clock {
+pub struct Time {
     time_s: u64,
     time_ns: u64,
 }
 
-impl Clock {
+impl Time {
     pub fn new(id: ClockId) -> Self {
         let time: Timespec = clock_gettime(id);
         Self {

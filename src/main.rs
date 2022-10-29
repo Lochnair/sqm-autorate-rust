@@ -2,7 +2,6 @@ extern crate core;
 
 mod baseliner;
 mod cake;
-mod clock;
 mod config;
 mod endian;
 mod log;
@@ -12,6 +11,7 @@ mod pinger_icmp;
 mod pinger_icmp_ts;
 mod ratecontroller;
 mod reflector_selector;
+mod time;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
 use ::log::debug;
