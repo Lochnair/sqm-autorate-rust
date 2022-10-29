@@ -21,10 +21,8 @@ impl ReflectorSelector {
     pub fn run(&self) -> anyhow::Result<()> {
         let mut selector_sleep_time = Duration::new(30, 0);
         let mut reselection_count = 0;
-        let baseline_sleep_time = Duration::new(
-            (self.config.tick_interval * std::f64::consts::PI) as u64,
-            (((self.config.tick_interval * std::f64::consts::PI) % 1.0) * 1e9) as u32,
-        );
+        let baseline_sleep_time =
+            Duration::from_secs_f64(self.config.tick_interval * std::f64::consts::PI);
 
         let mut rng = thread_rng();
 
