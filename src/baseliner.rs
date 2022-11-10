@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Copy, Clone)]
 pub struct ReflectorStats {
     pub down_ewma: f64,
     pub up_ewma: f64,
-    pub last_receive_time_s: f64,
+    pub last_receive_time_s: Instant,
 }
 
 pub struct Baseliner {
@@ -18,6 +19,7 @@ pub struct Baseliner {
     pub owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     pub owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     pub reselect_trigger: Sender<bool>,
+    pub start_time: Instant,
     pub stats_receiver: Receiver<PingReply>,
 }
 
@@ -64,8 +66,16 @@ impl Baseliner {
                 .entry(time_data.reflector)
                 .or_insert(owd_recent_new);
 
-            if time_data.last_receive_time_s - owd_baseline.last_receive_time_s > 30.0
-                || time_data.last_receive_time_s - owd_recent.last_receive_time_s > 30.0
+            if time_data
+                .last_receive_time_s
+                .duration_since(owd_baseline.last_receive_time_s)
+                .as_secs_f64()
+                > 30.0
+                || time_data
+                    .last_receive_time_s
+                    .duration_since(owd_recent.last_receive_time_s)
+                    .as_secs_f64()
+                    > 30.0
             {
                 owd_baseline.down_ewma = time_data.down_time;
                 owd_baseline.up_ewma = time_data.up_time;
@@ -82,8 +92,9 @@ impl Baseliner {
             if time_data.up_time > owd_baseline.up_ewma + 5000.0
                 || time_data.down_time > owd_baseline.down_ewma + 5000.0
             {
-                owd_baseline.last_receive_time_s = time_data.last_receive_time_s - 60.0;
-                owd_recent.last_receive_time_s = time_data.last_receive_time_s - 60.0;
+                // mark the data as bad by setting the receive time to the time autorate was started
+                owd_baseline.last_receive_time_s = self.start_time;
+                owd_recent.last_receive_time_s = self.start_time;
                 info!(
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
                     time_data.reflector

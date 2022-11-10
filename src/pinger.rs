@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::str::FromStr;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io, thread};
 use thiserror::Error;
 
@@ -36,7 +36,7 @@ pub struct PingReply {
     pub originate_timestamp: i64,
     pub receive_timestamp: i64,
     pub transmit_timestamp: i64,
-    pub last_receive_time_s: f64,
+    pub last_receive_time_s: Instant,
 }
 
 fn open_socket(type_: MeasurementType) -> io::Result<Socket> {

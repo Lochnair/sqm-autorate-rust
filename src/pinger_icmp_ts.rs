@@ -6,6 +6,7 @@ use etherparse::TransportSlice::{Icmpv4, Icmpv6};
 use etherparse::{Icmpv4Header, Icmpv4Type, SlicedPacket};
 use rustix::thread::ClockId;
 use std::net::IpAddr;
+use std::time::Instant;
 
 pub struct PingerICMPTimestampListener {}
 
@@ -47,8 +48,7 @@ impl PingListener for PingerICMPTimestampListener {
                             originate_timestamp: originate_timestamp as i64,
                             receive_timestamp: receive_timestamp as i64,
                             transmit_timestamp: transmit_timestamp as i64,
-                            last_receive_time_s: time_now.get_seconds() as f64
-                                + (time_now.get_nanoseconds() as f64 / 1e9),
+                            last_receive_time_s: Instant::now(),
                         })
                     }
                     type_ => Err(PingError::InvalidType(format!("{:?}", type_))),

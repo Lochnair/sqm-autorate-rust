@@ -14,7 +14,7 @@ mod reflector_selector;
 mod time;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
-use ::log::debug;
+use ::log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -22,6 +22,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 use std::{process, thread};
 
 use crate::config::{Config, MeasurementType};
@@ -40,6 +41,7 @@ fn main() -> anyhow::Result<()> {
     let config = Config::new()?;
     log::init(config.log_level)?;
     let mut reflectors = config.load_reflectors()?;
+    let start_t = Instant::now();
 
     // The identifier field in ICMP is only 2 bytes
     // so take the last 2 bytes of the PID as the ID
@@ -95,6 +97,7 @@ fn main() -> anyhow::Result<()> {
         owd_baseline: owd_baseline.clone(),
         owd_recent: owd_recent.clone(),
         reselect_trigger: reselect_sender.clone(),
+        start_time: start_t,
         stats_receiver: baseliner_stats_receiver,
     };
 
@@ -105,9 +108,21 @@ fn main() -> anyhow::Result<()> {
      * so there should be no initial bufferbloat to
      * fool the baseliner
      */
+    info!(
+        "Setting shaper rates to minimum (D/L): {} / {}",
+        config.download_min_kbits, config.upload_min_kbits
+    );
     Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64)?;
     Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64)?;
-    sleep(Duration::new(0, 5e8 as u32));
+
+    // Sleep for a few seconds to give the shaper a chance
+    // to control the queue if load is heavy
+    let settle_sleep_time = Duration::new(2, 0);
+    info!(
+        "Sleeping for {} to give the shaper a chance to get in control if there's bloat",
+        settle_sleep_time.as_secs_f64()
+    );
+    sleep(settle_sleep_time);
 
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
     let receiver_handle = thread::Builder::new().name("receiver".to_string()).spawn(

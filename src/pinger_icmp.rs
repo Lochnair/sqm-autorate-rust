@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::time::Instant;
 
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;
@@ -46,8 +47,7 @@ impl PingListener for PingerICMPEchoListener {
                             originate_timestamp: 0,
                             receive_timestamp: 0,
                             transmit_timestamp: 0,
-                            last_receive_time_s: clock.get_seconds() as f64
-                                + (clock.get_nanoseconds() as f64 / 1e9),
+                            last_receive_time_s: Instant::now(),
                         })
                     }
                     type_ => Err(PingError::InvalidType(format!("{:?}", type_))),

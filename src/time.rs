@@ -16,14 +16,6 @@ impl Time {
         }
     }
 
-    pub fn get_seconds(&self) -> u64 {
-        self.time_s
-    }
-
-    pub fn get_nanoseconds(&self) -> u64 {
-        self.time_ns
-    }
-
     pub fn get_time_since_midnight(&self) -> i64 {
         (self.time_s as i64 % 86400 * 1000) + (self.time_ns as i64 / 1000000)
     }
