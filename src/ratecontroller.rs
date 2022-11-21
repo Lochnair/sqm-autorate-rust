@@ -400,7 +400,7 @@ impl Ratecontroller {
                 if let Some(ref mut fd) = stats_fd {
                     if let Err(e) = fd.write(
                         format!(
-                            "{},{},{},{},{},{},{}",
+                            "{},{},{},{},{},{},{}\n",
                             time_format(SystemTime::now(), DUMP_DATETIME_FORMAT),
                             self.state_dl.load,
                             self.state_ul.load,
