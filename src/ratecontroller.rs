@@ -97,6 +97,25 @@ struct State {
     utilisation: f64,
 }
 
+impl State {
+    fn new(qdisc: Qdisc, previous_bytes: i128, safe_rates: Vec<f64>) -> Self {
+        State {
+            current_bytes: 0,
+            current_rate: 0.0,
+            delta_stat: 0.0,
+            deltas: Vec::new(),
+            load: 0.0,
+            next_rate: 0.0,
+            nrate: 0,
+            qdisc,
+            previous_bytes,
+            prev_t: Instant::now(),
+            safe_rates,
+            utilisation: 0.0,
+        }
+    }
+}
+
 pub struct Ratecontroller {
     config: Config,
     down_direction: StatsDirection,
@@ -266,34 +285,8 @@ impl Ratecontroller {
             owd_recent,
             reflectors_lock,
             reselect_trigger,
-            state_dl: State {
-                current_bytes: 0,
-                current_rate: 0.0,
-                delta_stat: 0.0,
-                deltas: Vec::new(),
-                load: 0.0,
-                next_rate: 0.0,
-                nrate: 0,
-                qdisc: dl_qdisc,
-                previous_bytes: cur_rx,
-                prev_t: Instant::now(),
-                safe_rates: dl_safe_rates,
-                utilisation: 0.0,
-            },
-            state_ul: State {
-                current_bytes: 0,
-                current_rate: 0.0,
-                delta_stat: 0.0,
-                deltas: Vec::new(),
-                load: 0.0,
-                next_rate: 0.0,
-                nrate: 0,
-                qdisc: ul_qdisc,
-                previous_bytes: cur_tx,
-                prev_t: Instant::now(),
-                safe_rates: ul_safe_rates,
-                utilisation: 0.0,
-            },
+            state_dl: State::new(dl_qdisc, cur_rx, dl_safe_rates),
+            state_ul: State::new(ul_qdisc, cur_tx, ul_safe_rates),
             up_direction,
         })
     }
