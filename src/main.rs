@@ -1,7 +1,6 @@
 extern crate core;
 
 mod baseliner;
-mod cake;
 mod config;
 mod endian;
 mod log;

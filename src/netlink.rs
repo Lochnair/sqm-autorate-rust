@@ -1,5 +1,3 @@
-use crate::cake::TcaCake;
-
 use neli::consts::nl::{NlmF, NlmFFlags};
 use neli::consts::rtnl::{Arphrd, IffFlags, Ifla, RtAddrFamily, Rtm, Tca};
 use neli::consts::socket::NlFamily;
@@ -48,6 +46,12 @@ pub enum NetlinkError {
     WrongType { expected: Rtm, found: Rtm },
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Qdisc {
+    ifindex: i32,
+    parent: u32,
+}
+
 #[derive(Deserialize, Copy, Clone, Default, Debug)]
 #[repr(C)]
 pub struct RtnlLinkStats64 {
@@ -77,10 +81,8 @@ pub struct RtnlLinkStats64 {
     pub rx_nohandler: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Qdisc {
-    ifindex: i32,
-    parent: u32,
+pub enum TcaCake {
+    BaseRate64 = 2,
 }
 
 pub struct Netlink {}
