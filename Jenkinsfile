@@ -38,6 +38,7 @@ pipeline {
 					CC = "${GCC_TARGET}-gcc"
 					LINKER_ENV_KEY = getLinkerEnv(TARGET)
 					PATH = "${WORKSPACE}/${GCC_TARGET}-cross/bin:${env.HOME}/.cargo/bin:${env.PATH}"
+					RUSTFLAGS = "-C target-feature=+crt-static"
 					TOOLCHAIN_URL = "https://musl.cc/${GCC_TARGET}-cross.tgz"
 				}
 
