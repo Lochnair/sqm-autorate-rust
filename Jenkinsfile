@@ -37,7 +37,7 @@ pipeline {
 							expression {
 								def res = sh(script: "rustup target list --installed", returnStdout: true)
 
-								if (res.contains(TARGET) {
+								if (res.contains(TARGET)) {
                                     return false
                                 } else {
                                     return true
