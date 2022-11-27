@@ -28,8 +28,7 @@ pipeline {
 				axes {
 					axis {
 						name 'TARGET'
-						//values 'mips-unknown-linux-musl', 'mips64-unknown-linux-muslabi64', 'mips64el-unknown-linux-muslabi64', 'mipsel-unknown-linux-musl', 'x86_64-unknown-linux-musl'
-						values 'mips-unknown-linux-musl'
+						values 'mips-unknown-linux-musl', 'mips64-unknown-linux-muslabi64', 'mips64el-unknown-linux-muslabi64', 'mipsel-unknown-linux-musl', 'x86_64-unknown-linux-musl'
 					}
 				}
 
