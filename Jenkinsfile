@@ -26,7 +26,7 @@ pipeline {
 				environment {
 					GCC_TARGET = getGCCTarget(TARGET)
 					CC = "${GCC_TARGET}-gcc"
-					PATH = "${WORKSPACE}/${GCC_TARGET}-cross:${env.HOME}/.cargo/bin:${env.PATH}"
+					PATH = "${WORKSPACE}/${GCC_TARGET}-cross/bin:${env.HOME}/.cargo/bin:${env.PATH}"
 					TOOLCHAIN_URL = "https://musl.cc/${GCC_TARGET}-cross.tgz"
 				}
 
@@ -34,9 +34,9 @@ pipeline {
 					stage('Download GCC toolchain') {
 						when {
 							expression {
-								def process = "${GCC_TARGET}-gcc".execute()
+								def res = sh(script: "${GCC_TARGET}-gcc", returnStatus: true)
 
-                                if (process.exitValue() > 0) {
+                                if (res > 0) {
                                     return false
                                 } else {
                                     return true
