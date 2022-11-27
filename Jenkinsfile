@@ -14,6 +14,11 @@ def getGCCTarget(rust_target) {
 	return targetMapping[rust_target]
 }
 
+// CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
+def getLinkerEnv(target) {
+	return 'CARGO_TARGET_' + target.replace('-', '_').toUpperCase() + '_LINKER'
+}
+
 pipeline {
 	agent any
 
@@ -32,6 +37,7 @@ pipeline {
 					GCC_TARGET = getGCCTarget(TARGET)
 					TARGET_ARCH = getArch(GCC_TARGET)
 					CC = "${GCC_TARGET}-gcc"
+					LINKER_ENV_KEY = getLinkerEnv(TARGET)
 					PATH = "${WORKSPACE}/${GCC_TARGET}-cross/bin:${env.HOME}/.cargo/bin:${env.PATH}"
 					TOOLCHAIN_URL = "https://musl.cc/${GCC_TARGET}-cross.tgz"
 				}
@@ -76,7 +82,9 @@ pipeline {
 
 					stage('Build') {
 						steps {
-							sh "cargo build --release --target ${TARGET}"
+							withEnv(["${LINKER_ENV_KEY}=${CC}"]) {
+								sh "cargo build --release --target ${TARGET}"
+							}
 						}
 					}
 
