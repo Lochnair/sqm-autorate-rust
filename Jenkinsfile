@@ -33,7 +33,7 @@ pipeline {
 				stages {
 					stage('Download GCC toolchain') {
 						steps {
-							httpRequest outputFile: GCC_TARGET + '-cross.tgz', url: TOOLCHAIN_URL
+							sh "wget ${TOOLCHAIN_URL}"
 							sh 'mkdir ' + GCC_TARGET + '-cross'
 							sh 'tar -x -z -f ' + GCC_TARGET + '-cross.tgz'
 						}
