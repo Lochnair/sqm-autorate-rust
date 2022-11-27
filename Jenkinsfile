@@ -1,3 +1,7 @@
+def getArch(target) {
+	return target.tokenize('-')[0]
+}
+
 def getGCCTarget(rust_target) {
 	targetMapping = [
     	"mips-unknown-linux-musl": "mips-linux-muslsf",
@@ -26,6 +30,7 @@ pipeline {
 
 				environment {
 					GCC_TARGET = getGCCTarget(TARGET)
+					TARGET_ARCH = getArch(GCC_TARGET)
 					CC = "${GCC_TARGET}-gcc"
 					PATH = "${WORKSPACE}/${GCC_TARGET}-cross/bin:${env.HOME}/.cargo/bin:${env.PATH}"
 					TOOLCHAIN_URL = "https://musl.cc/${GCC_TARGET}-cross.tgz"
@@ -71,7 +76,16 @@ pipeline {
 
 					stage('Build') {
 						steps {
-							sh "rustc --version"
+							sh "cargo build --release --target ${TARGET}"
+						}
+					}
+
+					stage('Archive artifact') {
+						steps {
+							dir("target/${TARGET}/release") {
+								sh "cp -v sqm-autorate-rust sqm-autorate-rust-${TARGET_ARCH}"
+								archiveArtifacts artifacts: "sqm-autorate-rust-${TARGET_ARCH}", fingerprint: true, onlyIfSuccessful: true
+							}
 						}
 					}
 				}
