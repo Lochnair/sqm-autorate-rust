@@ -16,7 +16,7 @@ def getGCCTarget(rust_target) {
 
 // CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
 def getLinkerEnv(target) {
-	return 'CARGO_TARGET_' + target.replace('-', '_').toUpperCase() + '_LINKER'
+	return 'CARGO_TARGET_' + target.replaceAll('-', '_').toUpperCase() + '_LINKER'
 }
 
 pipeline {
