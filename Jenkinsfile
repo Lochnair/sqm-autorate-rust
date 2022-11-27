@@ -35,12 +35,12 @@ pipeline {
 					stage('Install Rust target') {
 						when {
 							expression {
-								def rs = sh(script: "rustup target list --installed | grep ${TARGET}", returnStatus: true)
+								def res = sh(script: "rustup target list --installed", returnStdout: true)
 
-								if (res > 0) {
-                                    return true
-                                } else {
+								if (res.contains(TARGET) {
                                     return false
+                                } else {
+                                    return true
                                 }
 							}
 						}
