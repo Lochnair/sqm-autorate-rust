@@ -62,7 +62,7 @@ pipeline {
 							}
 						}
 						steps {
-							sh "wget ${TOOLCHAIN_URL}"
+							sh "wget -q ${TOOLCHAIN_URL}"
 							sh 'mkdir ' + GCC_TARGET + '-cross'
 							sh 'tar -x -z -f ' + GCC_TARGET + '-cross.tgz'
 							sh 'rm -vf ${GCC_TARGET}-cross.tgz'
