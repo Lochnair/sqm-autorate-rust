@@ -34,7 +34,7 @@ pipeline {
 					stage('Download GCC toolchain') {
 						when {
 							expression {
-								def res = sh(script: "${GCC_TARGET}-gcc", returnStatus: true)
+								def res = sh(script: "${GCC_TARGET}-gcc -v", returnStatus: true)
 
                                 if (res > 0) {
                                     return false
