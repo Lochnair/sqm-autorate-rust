@@ -32,10 +32,22 @@ pipeline {
 
 				stages {
 					stage('Download GCC toolchain') {
+						when {
+							expression {
+								def process = "${GCC_TARGET}-gcc".execute()
+
+                                if process.exitValue() > 0 {
+                                    return false
+                                } else {
+                                    return true
+                                }
+							}
+						}
 						steps {
 							sh "wget ${TOOLCHAIN_URL}"
 							sh 'mkdir ' + GCC_TARGET + '-cross'
 							sh 'tar -x -z -f ' + GCC_TARGET + '-cross.tgz'
+							sh 'rm -vf ${GCC_TARGET}-cross.tgz'
 						}
 					}
 
