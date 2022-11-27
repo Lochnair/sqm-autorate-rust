@@ -31,6 +31,23 @@ pipeline {
 				}
 
 				stages {
+					stage('Install Rust target') {
+						when {
+							expression {
+								def rs = sh(script: "rustup target list --installed | grep ${TARGET}", returnStatus: true)
+
+								if (res > 0) {
+                                    return true
+                                } else {
+                                    return false
+                                }
+							}
+						}
+
+						steps {
+							sh "rustup target add ${TARGET}"
+						}
+					}
 					stage('Download GCC toolchain') {
 						when {
 							expression {
