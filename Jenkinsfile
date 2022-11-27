@@ -36,7 +36,7 @@ pipeline {
 							expression {
 								def process = "${GCC_TARGET}-gcc".execute()
 
-                                if process.exitValue() > 0 {
+                                if (process.exitValue() > 0) {
                                     return false
                                 } else {
                                     return true
