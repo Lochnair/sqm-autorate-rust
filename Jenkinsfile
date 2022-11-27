@@ -82,7 +82,7 @@ pipeline {
 
 					stage('Build') {
 						steps {
-							withEnv(["${LINKER_ENV_KEY}=${CC}"]) {
+							withEnv(["${LINKER_ENV_KEY}=${CC}", "RUSTFLAGS=-C target-feature=+crt-static"]) {
 								sh "cargo build --release --target ${TARGET}"
 							}
 						}
