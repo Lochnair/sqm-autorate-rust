@@ -25,9 +25,9 @@ pipeline {
 
 				environment {
 					GCC_TARGET = getGCCTarget(TARGET)
-					CC = GCC_TARGET + '-gcc'
+					CC = '${GCC_TARGET}-gcc'
 					PATH = "${WORKSPACE}/${GCC_TARGET}-cross:${env.HOME}/.cargo/bin:${env.PATH}"
-					TOOLCHAIN_URL = 'https://musl.cc/' + GCC_TARGET + '-cross.tgz'
+					TOOLCHAIN_URL = 'https://musl.cc/${GCC_TARGET}-cross.tgz'
 				}
 
 				stages {
