@@ -2,7 +2,7 @@ def targetMapping = [
 	"mips-unknown-linux-musl": "mips-linux-muslsf",
 	"mips64-unknown-linux-muslabi64": "mips64-linux-musl",
 	"mips64el-unknown-linux-muslabi64": "mips64el-linux-musl",
-	"mipsel-unknown-linux-musl": "mipsel-linux-muslsf"
+	"mipsel-unknown-linux-musl": "mipsel-linux-muslsf",
 	"x86_64-unknown-linux-musl": "x86_64-linux-musl"
 ]
 
