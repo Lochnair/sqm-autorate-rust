@@ -4,6 +4,10 @@ def getArch(target) {
 
 def getGCCTarget(rust_target) {
 	targetMapping = [
+		"aarch64-unknown-linux-musl": "aarch64-linux-musl",
+		"arm-unknown-linux-musleabi": "arm-linux-musleabi",
+		"armv7-unknown-linux-musleabi": "armv7m-linux-musleabi",
+		"armv7-unknown-linux-musleabihf": "armv7l-linux-musleabihf",
     	"mips-unknown-linux-musl": "mips-linux-muslsf",
     	"mips64-unknown-linux-muslabi64": "mips64-linux-musl",
     	"mips64el-unknown-linux-muslabi64": "mips64el-linux-musl",
@@ -28,7 +32,7 @@ pipeline {
 				axes {
 					axis {
 						name 'TARGET'
-						values 'mips-unknown-linux-musl', 'mips64-unknown-linux-muslabi64', 'mips64el-unknown-linux-muslabi64', 'mipsel-unknown-linux-musl', 'x86_64-unknown-linux-musl'
+						values 'aarch64-unknown-linux-musl', 'arm-unknown-linux-musleabi', 'armv7-unknown-linux-musleabi', 'armv7-unknown-linux-musleabihf','mips-unknown-linux-musl', 'mips64-unknown-linux-muslabi64', 'mips64el-unknown-linux-muslabi64', 'mipsel-unknown-linux-musl', 'x86_64-unknown-linux-musl'
 					}
 				}
 
