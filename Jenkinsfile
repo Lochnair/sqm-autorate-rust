@@ -37,9 +37,9 @@ pipeline {
 								def res = sh(script: "${GCC_TARGET}-gcc -v", returnStatus: true)
 
                                 if (res > 0) {
-                                    return false
-                                } else {
                                     return true
+                                } else {
+                                    return false
                                 }
 							}
 						}
