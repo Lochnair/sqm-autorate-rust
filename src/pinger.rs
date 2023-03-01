@@ -122,12 +122,13 @@ pub trait PingSender {
 
         let mut seq: u16 = 0;
         let tick_duration_ms: u16 = 500;
-        let sleep_duration = Duration::from_millis(tick_duration_ms as u64);
 
         loop {
             let reflectors_unlocked = reflectors_lock.read().unwrap();
             let reflectors = reflectors_unlocked.clone();
             drop(reflectors_unlocked);
+            let sleep_duration =
+                Duration::from_millis((tick_duration_ms / reflectors.len() as u16) as u64);
 
             for reflector in reflectors.iter() {
                 let addr: SockAddr = match reflector.is_ipv4() {
@@ -147,9 +148,8 @@ pub trait PingSender {
                 let buf = buf_v.as_slice();
 
                 socket.send_to(buf, &addr)?;
+                thread::sleep(sleep_duration);
             }
-
-            thread::sleep(sleep_duration);
 
             if seq == u16::MAX {
                 seq = 0;
