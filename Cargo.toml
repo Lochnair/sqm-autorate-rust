@@ -27,7 +27,7 @@ neli = "0.6"
 rand = "0.8"
 rustix = { version = "0.37", features = ["fs", "thread", "time"] }
 rust-uci = { version = "0.1", optional = true }
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.4", features = ["all"] }
 thiserror = "1.0"
 
 [dependencies.log]
