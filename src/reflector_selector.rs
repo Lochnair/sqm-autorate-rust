@@ -1,7 +1,7 @@
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
-use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
+use rand::seq::IndexedRandom;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
@@ -24,7 +24,7 @@ impl ReflectorSelector {
         let baseline_sleep_time =
             Duration::from_secs_f64(self.config.tick_interval * std::f64::consts::PI);
 
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Initial wait of several seconds to allow some OWD data to build up
         sleep(baseline_sleep_time);
@@ -107,7 +107,7 @@ impl ReflectorSelector {
 
             // Shuffle the deck so we avoid overwhelming good reflectors (Fisher-Yates)
             for i in (1_usize..candidates.len()).rev() {
-                let j = rng.gen_range(0..(i + 1));
+                let j = rng.random_range(0..(i + 1));
                 candidates.swap(i, j);
             }
 

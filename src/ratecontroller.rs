@@ -1,9 +1,8 @@
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::{Config, ReflectorStats};
 use log::{debug, error, info, warn};
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-use rand::RngCore;
+use rand::seq::IndexedRandom;
+use rand::{rng, RngCore};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -52,7 +51,7 @@ fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
     let mut rates = Vec::new();
 
     for _ in 0..size {
-        rates.push((thread_rng().next_u64() as f64 * 0.2 + 0.75) * base_speed);
+        rates.push((rng().next_u64() as f64 * 0.2 + 0.75) * base_speed);
     }
 
     rates
@@ -190,7 +189,7 @@ impl Ratecontroller {
                     }
 
                     if state.delta_stat > delay_ms {
-                        let mut rng = thread_rng();
+                        let mut rng = rng();
                         match state.safe_rates.choose(&mut rng) {
                             Some(rnd_rate) => {
                                 state.next_rate =
