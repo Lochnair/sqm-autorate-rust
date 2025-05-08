@@ -50,6 +50,7 @@ pipeline {
 						steps {
 							withEnv(["${LINKER_ENV_KEY}=${CC}", "RUSTFLAGS=-C target-feature=+crt-static"]) {
 								sh """
+								printenv
 								cargo +nightly build \
 									-Z build-std=std,panic_abort \
 									-Z build-std-features="optimize_for_size" \
