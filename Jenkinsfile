@@ -24,7 +24,7 @@ def getLinkerEnv(target) {
 }
 
 pipeline {
-	agent any
+	agent { dockerfile true }
 
 	stages {
 		stage('Main') {
@@ -41,53 +41,20 @@ pipeline {
 					TARGET_ARCH = getArch(GCC_TARGET)
 					CC = "${GCC_TARGET}-gcc"
 					LINKER_ENV_KEY = getLinkerEnv(TARGET)
-					PATH = "${WORKSPACE}/${GCC_TARGET}-cross/bin:${env.HOME}/.cargo/bin:${env.PATH}"
+					PATH = "/opt/${GCC_TARGET}-cross/bin:/home/sdk/.cargo/bin:${env.PATH}"
 					RUSTFLAGS = "-C target-feature=+crt-static"
-					TOOLCHAIN_URL = "https://musl.cc/${GCC_TARGET}-cross.tgz"
 				}
 
 				stages {
-					stage('Install Rust target') {
-						when {
-							expression {
-								def res = sh(script: "rustup target list --installed", returnStdout: true)
-
-								if (res.contains(TARGET)) {
-                                    return false
-                                } else {
-                                    return true
-                                }
-							}
-						}
-
-						steps {
-							sh "rustup target add ${TARGET}"
-						}
-					}
-					stage('Download GCC toolchain') {
-						when {
-							expression {
-								def res = sh(script: "${CC} -v", returnStatus: true)
-
-                                if (res > 0) {
-                                    return true
-                                } else {
-                                    return false
-                                }
-							}
-						}
-						steps {
-							sh "wget -q ${TOOLCHAIN_URL}"
-							sh 'mkdir ' + GCC_TARGET + '-cross'
-							sh 'tar -x -z -f ' + GCC_TARGET + '-cross.tgz'
-							sh 'rm -vf ${GCC_TARGET}-cross.tgz'
-						}
-					}
-
 					stage('Build') {
 						steps {
 							withEnv(["${LINKER_ENV_KEY}=${CC}", "RUSTFLAGS=-C target-feature=+crt-static"]) {
-								sh "cargo build --release --target ${TARGET}"
+								sh """
+								cargo +nightly build \
+									-Z build-std=std,panic_abort \
+									-Z build-std-features="optimize_for_size" \
+									--target ${TARGET} --release
+								"""
 							}
 						}
 					}
