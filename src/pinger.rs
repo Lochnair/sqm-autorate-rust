@@ -1,5 +1,5 @@
 use crate::MeasurementType;
-use etherparse::ReadError;
+use etherparse::err::packet::SliceError;
 use log::{debug, error};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
@@ -15,7 +15,7 @@ pub enum PingError {
     #[error("Couldn't parse number")]
     InvalidNumber(#[from] io::Error),
     #[error("Error parsing packet")]
-    InvalidPacket(#[from] ReadError),
+    InvalidPacket(#[from] SliceError),
     #[error("Invalid protocol")]
     InvalidProtocol(String),
     #[error("Invalid packet type")]
