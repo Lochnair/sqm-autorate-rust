@@ -24,7 +24,11 @@ def getLinkerEnv(target) {
 }
 
 pipeline {
-	agent { dockerfile true }
+	agent { 
+		dockerfile {
+			additionalBuildArgs '--network=host'
+		}
+	}
 
 	stages {
 		stage('Main') {
