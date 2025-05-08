@@ -8,6 +8,7 @@ RUN apk add --no-cache \
     gcc \
     musl-dev \
     libgcc \
+    lld \
     openssl-dev \
     pkgconfig \
     make \

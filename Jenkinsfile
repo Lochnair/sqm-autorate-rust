@@ -42,7 +42,7 @@ pipeline {
 					GCC = "${GCC_TARGET}-gcc"
 					LINKER_ENV_KEY = getLinkerEnv(TARGET)
 					PATH_CC = "/opt/${GCC_TARGET}-cross/bin:/home/sdk/.cargo/bin"
-					RUSTFLAGS = "-C target-feature=+crt-static"
+					RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-fuse-ld=lld"
 				}
 
 				stages {
