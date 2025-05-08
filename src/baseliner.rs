@@ -58,11 +58,11 @@ impl Baseliner {
                 last_receive_time_s: time_data.last_receive_time_s,
             };
 
-            let mut owd_baseline = owd_baseline_map
+            let owd_baseline = owd_baseline_map
                 .entry(time_data.reflector)
                 .or_insert(owd_baseline_new);
 
-            let mut owd_recent = owd_recent_map
+            let owd_recent = owd_recent_map
                 .entry(time_data.reflector)
                 .or_insert(owd_recent_new);
 
