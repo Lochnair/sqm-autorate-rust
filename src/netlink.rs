@@ -1,3 +1,5 @@
+use bincode::error::DecodeError;
+use bincode::BorrowDecode;
 use neli::consts::nl::{NlmF, NlmFFlags};
 use neli::consts::rtnl::{Arphrd, IffFlags, Ifla, RtAddrFamily, Rtm, Tca};
 use neli::consts::socket::NlFamily;
@@ -6,17 +8,14 @@ use neli::nl::{NlPayload, Nlmsghdr};
 use neli::rtnl::{Ifinfomsg, Rtattr, Tcmsg};
 use neli::socket::NlSocketHandle;
 use neli::types::{Buffer, RtBuffer};
-use serde::Deserialize;
 use std::io;
 use std::str::Utf8Error;
 use thiserror::Error;
 
-use bincode::deserialize;
-
 #[derive(Debug, Error)]
 pub enum NetlinkError {
     #[error("Couldn't deserialize to struct")]
-    Deserialization(#[from] Box<bincode::ErrorKind>),
+    Deserialization(#[from] Box<DecodeError>),
 
     #[error("Couldn't find intreface `{0}`")]
     InterfaceNotFound(String),
@@ -52,7 +51,7 @@ pub struct Qdisc {
     parent: u32,
 }
 
-#[derive(Deserialize, Copy, Clone, Default, Debug)]
+#[derive(BorrowDecode, Copy, Clone, Default, Debug)]
 #[repr(C)]
 pub struct RtnlLinkStats64 {
     pub rx_packets: u64,
@@ -165,7 +164,8 @@ impl Netlink {
                     if attr.rta_type == Ifla::Stats64 {
                         let buf = attr.rta_payload.as_ref();
 
-                        let stats: RtnlLinkStats64 = deserialize(buf)?;
+                        let stats: RtnlLinkStats64 = bincode::borrow_decode_from_slice(buf, bincode::config::standard())
+                            .map_err(|e| NetlinkError::Deserialization(Box::new(e)))?.0;
 
                         return Ok(stats);
                     }
