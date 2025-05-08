@@ -3,7 +3,7 @@ def getArch(target) {
 }
 
 def getGCCTarget(rust_target) {
-	targetMapping = [
+	def targetMapping = [
 		"aarch64-unknown-linux-musl": "aarch64-linux-musl",
 		"arm-unknown-linux-musleabi": "arm-linux-musleabi",
 		"armv7-unknown-linux-musleabi": "armv7m-linux-musleabi",
@@ -48,15 +48,13 @@ pipeline {
 				stages {
 					stage('Build') {
 						steps {
-							withEnv(["${LINKER_ENV_KEY}=${CC}", "RUSTFLAGS=-C target-feature=+crt-static"]) {
-								sh """
+							sh """
 								printenv
 								cargo +nightly build \
 									-Z build-std=std,panic_abort \
 									-Z build-std-features="optimize_for_size" \
 									--target ${TARGET} --release
 								"""
-							}
 						}
 					}
 
