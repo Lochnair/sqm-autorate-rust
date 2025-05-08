@@ -41,21 +41,20 @@ pipeline {
 					TARGET_ARCH = getArch(GCC_TARGET)
 					CC = "${GCC_TARGET}-gcc"
 					LINKER_ENV_KEY = getLinkerEnv(TARGET)
-					'PATH+CC' = "/opt/${GCC_TARGET}-cross/bin:"
-					'PATH+RUST' = '/home/sdk/.cargo/bin'
+					PATH_CC = "/opt/${GCC_TARGET}-cross/bin:/home/sdk/.cargo/bin"
 					RUSTFLAGS = "-C target-feature=+crt-static"
 				}
 
 				stages {
 					stage('Build') {
 						steps {
-							sh """
-								printenv
+							sh '''
+								export PATH="$PATH_CC:$PATH"
 								cargo +nightly build \
 									-Z build-std=std,panic_abort \
 									-Z build-std-features="optimize_for_size" \
-									--target ${TARGET} --release
-								"""
+									--target $TARGET --release
+								'''
 						}
 					}
 
