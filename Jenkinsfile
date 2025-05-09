@@ -22,6 +22,7 @@ pipeline {
 						steps {
 							sh '''
 								export CARGO_HOME="$(pwd)/.cargo"
+								export CC="$TARGET_CC"
 								printenv | sort
 								cargo build \
 									--release
