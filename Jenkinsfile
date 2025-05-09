@@ -6,7 +6,7 @@ pipeline {
 			steps {
 				sh '''
 				    mkdir -p .local
-					wget -O- https://github.com/rui314/mold/releases/download/v2.39.0/mold-2.39.0-x86_64-linux.tar.gz | tar -xzv --strip-components=1 -C .local/
+					curl -L -s https://github.com/rui314/mold/releases/download/v2.39.0/mold-2.39.0-x86_64-linux.tar.gz | tar -xzv --strip-components=1 -C .local/
 				'''
 			}
 		}
