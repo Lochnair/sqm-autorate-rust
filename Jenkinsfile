@@ -21,7 +21,9 @@ pipeline {
 					stage('Build') {
 						steps {
 							sh '''
-								env CARGO_HOME="$(pwd)/.cargo" cargo build \
+								export CARGO_HOME="$(pwd)/.cargo"
+								printenv | sort
+								cargo build \
 									--release
 								'''
 						}
