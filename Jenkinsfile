@@ -2,6 +2,14 @@ pipeline {
 	agent any
 
 	stages {
+		stage('Preparation') {
+			steps {
+				sh '''
+				    mkdir -p .local
+					wget -O- https://github.com/rui314/mold/releases/download/v2.39.0/mold-2.39.0-x86_64-linux.tar.gz | tar -xzv --strip-components=1 -C .local/
+				'''
+			}
+		}
 		stage('Main') {
 			matrix {
 				axes {
@@ -22,7 +30,7 @@ pipeline {
 						steps {
 							sh '''
 								export CARGO_HOME="$(pwd)/.cargo"
-								export CC="$TARGET_CC"
+								export PATH="$(pwd)/.local/bin:${PATH}"
 								printenv | sort
 								cargo build \
 									--release
