@@ -21,7 +21,7 @@ pipeline {
 					stage('Build') {
 						steps {
 							sh '''
-								cargo build \
+								env CARGO_HOME="$(pwd)/.cargo" cargo build \
 									--release
 								'''
 						}
@@ -29,10 +29,11 @@ pipeline {
 
 					stage('Archive artifact') {
 						steps {
-							dir("target/${TARGET}/release") {
+							sh 'echo TODO'
+							/*dir("target/${TARGET}/release") {
 								sh "cp -v sqm-autorate-rust sqm-autorate-rust-${TARGET}"
 								archiveArtifacts artifacts: "sqm-autorate-rust-${TARGET}", fingerprint: true, onlyIfSuccessful: true
-							}
+							}*/
 						}
 					}
 				}
