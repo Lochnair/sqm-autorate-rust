@@ -16,5 +16,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install Mold
+      run: sudo apt install mold
     - name: Build
       run: cargo build --verbose
