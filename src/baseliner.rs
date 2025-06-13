@@ -48,13 +48,13 @@ impl Baseliner {
 
             let owd_baseline_new = ReflectorStats {
                 down_ewma: time_data.down_time,
-                up_ewma: time_data.down_time,
+                up_ewma: time_data.up_time,
                 last_receive_time_s: time_data.last_receive_time_s,
             };
 
             let owd_recent_new = ReflectorStats {
                 down_ewma: time_data.down_time,
-                up_ewma: time_data.down_time,
+                up_ewma: time_data.up_time,
                 last_receive_time_s: time_data.last_receive_time_s,
             };
 
