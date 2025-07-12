@@ -318,6 +318,7 @@ impl Ratecontroller {
             speed_hist_fd_inner = File::options()
                 .create(true)
                 .write(true)
+                .truncate(true)
                 .open(self.config.speed_hist_file.as_str())?;
 
             speed_hist_fd_inner.write_all("time,counter,upspeed,downspeed\n".as_bytes())?;
@@ -328,6 +329,7 @@ impl Ratecontroller {
             stats_fd_inner = File::options()
                 .create(true)
                 .write(true)
+                .truncate(true)
                 .open(self.config.stats_file.as_str())?;
 
             stats_fd_inner.write_all(
@@ -348,11 +350,6 @@ impl Ratecontroller {
 
                 (self.state_dl.current_bytes, self.state_ul.current_bytes) =
                     get_interface_stats(&self.config, self.down_direction, self.up_direction)?;
-                if self.state_dl.current_bytes == -1 || self.state_ul.current_bytes == -1 {
-                    warn!(
-                    "One or both Netlink stats could not be read. Skipping rate control algorithm");
-                    continue;
-                }
 
                 self.update_deltas();
                 self.calculate_rate(Direction::Down)?;
