@@ -226,7 +226,7 @@ impl Netlink {
 
                     if _type.eq(type_to_look_for) {
                         let qdisc = Qdisc {
-                            ifindex: p.tcm_ifindex as i32,
+                            ifindex: p.tcm_ifindex,
                             parent: p.tcm_parent,
                         };
 

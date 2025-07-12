@@ -52,13 +52,13 @@ impl ReflectorSelector {
 
             // Include all current peers
             for reflector in reflectors_peers.iter() {
-                debug!("Current peer: {}", reflector.to_string());
+                debug!("Current peer: {}", reflector);
                 next_peers.push(*reflector);
             }
 
             for _ in 1..20 {
                 let next_candidate = self.reflector_pool.choose(&mut rng).unwrap();
-                debug!("Next candidate: {}", next_candidate.to_string());
+                debug!("Next candidate: {}", next_candidate);
                 next_peers.push(*next_candidate);
             }
 
@@ -84,12 +84,9 @@ impl ReflectorSelector {
                 if owd_recent.contains_key(&peer) {
                     let rtt = (owd_recent[&peer].down_ewma + owd_recent[&peer].up_ewma) as u64;
                     candidates.push((peer, rtt));
-                    info!("Candidate reflector: {} RTT: {}", peer.to_string(), rtt);
+                    info!("Candidate reflector: {} RTT: {}", peer, rtt);
                 } else {
-                    info!(
-                        "No data found from candidate reflector: {} - skipping",
-                        peer.to_string()
-                    );
+                    info!("No data found from candidate reflector: {} - skipping", peer);
                 }
             }
 
@@ -99,7 +96,9 @@ impl ReflectorSelector {
             // Now we will just limit the candidates down to 2 * num_reflectors
             let mut num_reflectors = self.config.num_reflectors;
             let candidate_pool_num = (2 * num_reflectors) as usize;
-            candidates = candidates[0..candidate_pool_num - 1].to_vec();
+            if candidates.len() > candidate_pool_num {
+                candidates.truncate(candidate_pool_num);
+            }
 
             for (candidate, rtt) in candidates.iter() {
                 info!("Fastest candidate {}: {}", candidate, rtt);
@@ -118,10 +117,7 @@ impl ReflectorSelector {
             let mut new_peers = Vec::new();
             for i in 0..num_reflectors {
                 new_peers.push(candidates[i as usize].0);
-                info!(
-                    "New selected peer: {}",
-                    candidates[i as usize].0.to_string()
-                );
+                info!("New selected peer: {}", candidates[i as usize].0);
             }
 
             *reflectors_peers = new_peers;

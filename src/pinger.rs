@@ -133,12 +133,12 @@ pub trait PingSender {
             for reflector in reflectors.iter() {
                 let addr: SockAddr = match reflector.is_ipv4() {
                     true => {
-                        let ip4 = Ipv4Addr::from_str(&*reflector.to_string()).unwrap();
+                        let ip4 = Ipv4Addr::from_str(&reflector.to_string()).unwrap();
                         let sock4 = SocketAddrV4::new(ip4, 0);
                         sock4.into()
                     }
                     false => {
-                        let ip6 = Ipv6Addr::from_str(&*reflector.to_string()).unwrap();
+                        let ip6 = Ipv6Addr::from_str(&reflector.to_string()).unwrap();
                         let sock6 = SocketAddrV6::new(ip6, 0, 0, 0);
                         sock6.into()
                     }

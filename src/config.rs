@@ -43,13 +43,13 @@ impl FromStr for MeasurementType {
     type Err = ConfigError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        return match s.to_lowercase().as_str() {
+        match s.to_lowercase().as_str() {
             "icmp" => Ok(MeasurementType::Icmp),
             "icmp-timestamps" => Ok(MeasurementType::IcmpTimestamps),
             "ntp" => Ok(MeasurementType::Ntp),
             "tcp-timestamps" => Ok(MeasurementType::TcpTimestamps),
             &_ => Err(ConfigError::InvalidMeasurementType(s.to_string())),
-        };
+        }
     }
 }
 
