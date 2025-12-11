@@ -22,7 +22,7 @@ strip = "symbols"
 anyhow = "1.0"
 bincode = "2.0"
 byteorder = "1.5"
-etherparse = "0.18"
+etherparse = "0.19"
 neli = "0.6"
 rand = "0.9"
 rustix = { version = "1.0", features = ["fs", "thread", "time"] }
