@@ -30,9 +30,9 @@ impl PingListener for PingerICMPTimestampListener {
                         let time_now = Time::new(ClockId::Realtime);
                         let time_since_midnight = time_now.get_time_since_midnight();
 
-                        let originate_timestamp = reply.originate_timestamp.to_ne();
-                        let receive_timestamp = reply.receive_timestamp.to_ne();
-                        let transmit_timestamp = reply.transmit_timestamp.to_ne();
+                        let originate_timestamp = reply.originate_timestamp;
+                        let receive_timestamp = reply.receive_timestamp;
+                        let transmit_timestamp = reply.transmit_timestamp;
 
                         let rtt: i64 = time_since_midnight - originate_timestamp as i64;
                         let dl_time: i64 = time_since_midnight - transmit_timestamp as i64;

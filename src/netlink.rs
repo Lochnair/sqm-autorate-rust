@@ -250,41 +250,54 @@ impl Netlink {
     }
 
     pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64) -> Result<(), NetlinkError> {
-        let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[])?;
+        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
         let bandwidth = bandwidth_kbit * 1000 / 8;
 
         let mut attrs = RtBuffer::new();
 
-        let attr_type = Rtattr::new(None, Tca::Kind, "cake")?;
-        let mut attr_options = Rtattr::new(None, Tca::Options, Buffer::from(Vec::new()))?;
-        attr_options.add_nested_attribute(&Rtattr::new(
-            None,
-            TcaCake::BaseRate64 as u16,
-            bandwidth,
-        )?)?;
+        let attr_type = RtattrBuilder::default()
+            .rta_type(Tca::Kind)
+            .rta_payload("cake")
+            .build()
+            .unwrap();
+        let attr_options = RtattrBuilder::default()
+            .rta_type(Tca::Options)
+            .rta_payload(Buffer::from(Vec::new()))
+            .build()
+            .unwrap()
+            .nest(
+                &RtattrBuilder::default()
+                    .rta_type(TcaCake::BaseRate64 as u16)
+                    .rta_payload(bandwidth)
+                    .build()
+                    .unwrap(),
+            )?;
 
         attrs.push(attr_type);
         attrs.push(attr_options);
 
-        let tc_msg = Tcmsg::new(
-            u8::from(RtAddrFamily::Unspecified),
-            qdisc.ifindex,
-            0,
-            qdisc.parent,
-            0,
-            attrs,
-        );
+        let tc_msg = TcmsgBuilder::default()
+            .tcm_family(u8::from(RtAddrFamily::Unspecified))
+            .tcm_ifindex(qdisc.ifindex)
+            .tcm_handle(0)
+            .tcm_parent(qdisc.parent)
+            .tcm_info(0)
+            .rtattrs(attrs)
+            .build()
+            .unwrap();
 
-        let nlhdr = Nlmsghdr::new(
-            None,
-            Rtm::Newqdisc,
-            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
-            None,
-            None,
-            NlPayload::Payload(tc_msg),
-        );
+        let recv = socket
+            .send::<_, _, Rtm, Tcmsg>(
+                Rtm::Newqdisc,
+                NlmF::REQUEST | NlmF::ACK,
+                NlPayload::Payload(tc_msg),
+            )
+            .map_err(|e| NetlinkError::NlQdiscError(e))?;
 
-        socket.send(nlhdr)?;
+        for msg in recv {
+            let _ = msg?;
+        }
+
         Ok(())
     }
 }
