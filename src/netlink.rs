@@ -88,56 +88,64 @@ pub enum TcaCake {
 pub struct Netlink {}
 
 impl Netlink {
-    fn nl_interface_get(socket: &mut NlSocketHandle, ifname: &str) -> Result<(), NetlinkError> {
+    fn nl_interface_get(
+        socket: &NlRouter,
+        ifname: &str,
+    ) -> Result<neli::router::synchronous::NlRouterReceiverHandle<Rtm, Ifinfomsg>, NetlinkError>
+    {
         let mut attrs = RtBuffer::new();
 
         const RTEXT_FILTER_VF: i32 = 1 << 0;
 
-        let attr_ifname = Rtattr::new(None, Ifla::Ifname, ifname)?;
-        let attr_ext_mask = Rtattr::new(None, Ifla::ExtMask, RTEXT_FILTER_VF)?;
+        let attr_ifname = RtattrBuilder::default()
+            .rta_type(Ifla::Ifname)
+            .rta_payload(ifname)
+            .build()
+            .unwrap();
+        let attr_ext_mask = RtattrBuilder::default()
+            .rta_type(Ifla::ExtMask)
+            .rta_payload(RTEXT_FILTER_VF)
+            .build()
+            .unwrap();
         attrs.push(attr_ifname);
         attrs.push(attr_ext_mask);
 
-        let if_msg = Ifinfomsg::new(
-            RtAddrFamily::Unspecified,
-            Arphrd::None,
-            -1,
-            IffFlags::empty(),
-            IffFlags::empty(),
-            attrs,
-        );
+        let if_msg = IfinfomsgBuilder::default()
+            .ifi_family(RtAddrFamily::Unspecified)
+            .ifi_type(Arphrd::None)
+            .ifi_index(-1)
+            .ifi_flags(Iff::empty())
+            .ifi_change(Iff::empty())
+            .rtattrs(attrs)
+            .build()
+            .unwrap();
 
-        let nlhdr = Nlmsghdr::new(
-            None,
+        let recv = socket.send::<_, _, Rtm, Ifinfomsg>(
             Rtm::Getlink,
-            NlmFFlags::new(&[NlmF::Request, NlmF::Ack]),
-            None,
-            None,
+            NlmF::REQUEST | NlmF::ACK,
             NlPayload::Payload(if_msg),
-        );
+        )?;
 
-        socket.send(nlhdr)?;
-
-        Ok(())
+        Ok(recv)
     }
 
     pub fn find_interface(ifname: &str) -> Result<i32, NetlinkError> {
-        let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[]).unwrap();
+        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
 
-        Self::nl_interface_get(&mut socket, ifname)?;
+        let recv = Self::nl_interface_get(&socket, ifname)?;
 
-        for response in socket.iter(false) {
+        for response in recv {
             let header: Nlmsghdr<Rtm, Ifinfomsg> = response?;
 
-            if header.nl_type != Rtm::Newlink {
+            if header.nl_type() != &Rtm::Newlink {
                 return Err(NetlinkError::WrongType {
                     expected: Rtm::Newlink,
-                    found: header.nl_type,
+                    found: *header.nl_type(),
                 });
             }
 
-            if let NlPayload::Payload(p) = header.nl_payload {
-                return Ok(p.ifi_index);
+            if let NlPayload::Payload(p) = header.nl_payload() {
+                return Ok(*p.ifi_index());
             }
         }
 
