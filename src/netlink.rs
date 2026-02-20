@@ -1,13 +1,14 @@
 use bincode::error::DecodeError;
 use bincode::BorrowDecode;
-use neli::consts::nl::{NlmF, NlmFFlags};
-use neli::consts::rtnl::{Arphrd, IffFlags, Ifla, RtAddrFamily, Rtm, Tca};
+use neli::consts::nl::NlmF;
+use neli::consts::rtnl::{Arphrd, Iff, Ifla, RtAddrFamily, Rtm, Tca};
 use neli::consts::socket::NlFamily;
-use neli::err::{NlError, SerError};
+use neli::err::{RouterError, SerError};
 use neli::nl::{NlPayload, Nlmsghdr};
-use neli::rtnl::{Ifinfomsg, Rtattr, Tcmsg};
-use neli::socket::NlSocketHandle;
+use neli::router::synchronous::NlRouter;
+use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtattrBuilder, Tcmsg, TcmsgBuilder};
 use neli::types::{Buffer, RtBuffer};
+use neli::utils::Groups;
 use std::io;
 use std::str::Utf8Error;
 use thiserror::Error;
@@ -21,10 +22,10 @@ pub enum NetlinkError {
     InterfaceNotFound(String),
 
     #[error("Netlink interface error")]
-    NlInterfaceError(#[from] NlError<Rtm, Ifinfomsg>),
+    NlInterfaceError(#[from] RouterError<Rtm, Ifinfomsg>),
 
     #[error("Something went wrong while finding qdisc")]
-    NlQdiscError(#[from] NlError<Rtm, Tcmsg>),
+    NlQdiscError(#[from] RouterError<Rtm, Tcmsg>),
 
     #[error("Couldn't find CAKE qdisc on interface `{0}`")]
     NoQdiscFound(String),
