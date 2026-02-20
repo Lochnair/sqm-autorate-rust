@@ -1,6 +1,6 @@
 use crate::MeasurementType;
 use etherparse::err::packet::SliceError;
-use log::{debug, error};
+use log::debug;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::str::FromStr;

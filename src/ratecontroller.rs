@@ -1,8 +1,8 @@
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::{Config, ReflectorStats};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use rand::seq::IndexedRandom;
-use rand::{rng, RngCore};
+use rand::{rng, Rng};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;

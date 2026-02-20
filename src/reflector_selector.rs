@@ -1,7 +1,7 @@
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
-use rand::{rng, Rng};
 use rand::seq::IndexedRandom;
+use rand::{rng, RngExt};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
