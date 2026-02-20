@@ -21,22 +21,16 @@ strip = "symbols"
 [dependencies]
 anyhow = "1.0"
 bincode = "2.0"
-byteorder = "1.5"
-etherparse = "0.19"
+icmp-socket = "0.4.0"
 neli = "0.7"
 rand = "0.10"
 rustix = { version = "1.1", features = ["fs", "thread", "time"] }
 rust-uci = { version = "0.1", optional = true }
-socket2 = { version = "0.6", features = ["all"] }
 thiserror = "2.0"
 
 [dependencies.log]
 features = ["std"]
 version = "0.4"
-
-[dependencies.serde]
-features = ["derive"]
-version = "1.0"
 
 [dependencies.time]
 features = ["formatting", "macros"]
@@ -44,3 +38,6 @@ version = "0.3"
 
 [features]
 uci = ["dep:rust-uci"]
+
+[patch.crates-io]
+icmp-socket = { git = 'https://github.com/Lochnair/icmp-socket.git', tag = "v0.4.0"}

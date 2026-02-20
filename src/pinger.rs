@@ -1,9 +1,8 @@
 use crate::MeasurementType;
-use etherparse::err::packet::SliceError;
-use log::debug;
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
-use std::str::FromStr;
+use icmp_socket::socket::IcmpSocket;
+use icmp_socket::{IcmpSocket4, Icmpv4Packet};
+use log::{debug};
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -15,13 +14,9 @@ pub enum PingError {
     #[error("Couldn't parse number")]
     InvalidNumber(#[from] io::Error),
     #[error("Error parsing packet")]
-    InvalidPacket(#[from] SliceError),
-    #[error("Invalid protocol")]
-    InvalidProtocol(String),
+    InvalidPacket(String),
     #[error("Invalid packet type")]
     InvalidType(String),
-    #[error("No transport")]
-    NoTransport,
     #[error("Wrong ICMP identifier (expected {expected:?}, found {found:?})")]
     WrongID { expected: u16, found: u16 },
 }
@@ -39,31 +34,14 @@ pub struct PingReply {
     pub last_receive_time_s: Instant,
 }
 
-fn open_socket(type_: MeasurementType) -> io::Result<Socket> {
+fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
     match type_ {
         MeasurementType::Icmp | MeasurementType::IcmpTimestamps => {
-            Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4))
-        }
-        MeasurementType::Ntp => Socket::new(Domain::IPV4, Type::DGRAM, None),
+            IcmpSocket4::new()
+        },
         _ => {
             unimplemented!()
         }
-    }
-}
-
-trait ReadFrom {
-    fn read_from(&mut self) -> io::Result<(Vec<u8>, SockAddr)>;
-}
-
-impl ReadFrom for Socket {
-    fn read_from(&mut self) -> io::Result<(Vec<u8>, SockAddr)> {
-        let mut buffer = Vec::with_capacity(4096);
-        let (received, addr) = self.recv_from(buffer.spare_capacity_mut())?;
-
-        unsafe {
-            buffer.set_len(received);
-        }
-        Ok((buffer, addr))
     }
 }
 
@@ -78,14 +56,10 @@ pub trait PingListener {
         let socket = &mut open_socket(type_)?;
 
         loop {
-            let (buf, sender) = match socket.read_from() {
+            let (pkt, sender) = match socket.rcv_from() {
                 Ok(val) => val,
                 Err(_) => continue,
             };
-
-            // etherparse doesn't like when the size in the header doesn't match the buffer
-            // so resize the buffer when actual packet size is known
-            //buf = buf[..size].as_mut();
 
             let addr: IpAddr = sender.as_socket().unwrap().ip();
 
@@ -94,7 +68,7 @@ pub trait PingListener {
                 continue;
             }
 
-            let reply = match self.parse_packet(id, addr, buf.as_slice()) {
+            let reply = match self.parse_packet(id, addr, pkt) {
                 Ok(val) => val,
                 Err(_) => {
                     // parse_packet will throw an error if it's an unknown protocol etc.
@@ -108,7 +82,7 @@ pub trait PingListener {
         }
     }
 
-    fn parse_packet(&self, id: u16, reflector: IpAddr, buf: &[u8]) -> Result<PingReply, PingError>;
+    fn parse_packet(&self, id: u16, reflector: IpAddr, pkt: Icmpv4Packet) -> Result<PingReply, PingError>;
 }
 
 pub trait PingSender {
@@ -118,7 +92,7 @@ pub trait PingSender {
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
     ) -> anyhow::Result<()> {
-        let socket = &open_socket(type_)?;
+        let mut socket = open_socket(type_)?;
 
         let mut seq: u16 = 0;
         let tick_duration_ms: u16 = 500;
@@ -131,23 +105,12 @@ pub trait PingSender {
                 Duration::from_millis((tick_duration_ms / reflectors.len() as u16) as u64);
 
             for reflector in reflectors.iter() {
-                let addr: SockAddr = match reflector.is_ipv4() {
-                    true => {
-                        let ip4 = Ipv4Addr::from_str(&*reflector.to_string()).unwrap();
-                        let sock4 = SocketAddrV4::new(ip4, 0);
-                        sock4.into()
-                    }
-                    false => {
-                        let ip6 = Ipv6Addr::from_str(&*reflector.to_string()).unwrap();
-                        let sock6 = SocketAddrV6::new(ip6, 0, 0, 0);
-                        sock6.into()
-                    }
+                let addr: Ipv4Addr = match reflector {
+                    IpAddr::V4(ipv4) => *ipv4,
+                    IpAddr::V6(_) => unimplemented!(),
                 };
 
-                let buf_v = self.craft_packet(id, seq);
-                let buf = buf_v.as_slice();
-
-                socket.send_to(buf, &addr)?;
+                socket.send_to(addr, self.craft_packet(id, seq))?;
                 thread::sleep(sleep_duration);
             }
 
@@ -159,5 +122,5 @@ pub trait PingSender {
         }
     }
 
-    fn craft_packet(&self, id: u16, seq: u16) -> Vec<u8>;
+    fn craft_packet(&self, id: u16, seq: u16) -> icmp_socket::packet::Icmpv4Packet;
 }
