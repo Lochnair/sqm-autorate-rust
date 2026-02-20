@@ -1,4 +1,3 @@
-use crate::endian::ToNativeEndian;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;
 use etherparse::icmpv4::TimestampMessage;
