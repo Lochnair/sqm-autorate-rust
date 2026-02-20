@@ -154,27 +154,29 @@ impl Netlink {
     }
 
     pub fn get_interface_stats(ifname: &str) -> Result<RtnlLinkStats64, NetlinkError> {
-        let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[])?;
+        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
 
-        Self::nl_interface_get(&mut socket, ifname)?;
+        let recv = Self::nl_interface_get(&socket, ifname)?;
 
-        for response in socket.iter(false) {
+        for response in recv {
             let header: Nlmsghdr<Rtm, Ifinfomsg> = response?;
 
-            if header.nl_type != Rtm::Newlink {
+            if header.nl_type() != &Rtm::Newlink {
                 return Err(NetlinkError::WrongType {
                     expected: Rtm::Newlink,
-                    found: header.nl_type,
+                    found: *header.nl_type(),
                 });
             }
 
-            if let NlPayload::Payload(p) = header.nl_payload {
-                for attr in p.rtattrs.iter() {
-                    if attr.rta_type == Ifla::Stats64 {
-                        let buf = attr.rta_payload.as_ref();
+            if let NlPayload::Payload(p) = header.nl_payload() {
+                for attr in p.rtattrs().iter() {
+                    if attr.rta_type() == &Ifla::Stats64 {
+                        let buf = attr.rta_payload().as_ref();
 
-                        let stats: RtnlLinkStats64 = bincode::borrow_decode_from_slice(buf, bincode::config::standard())
-                            .map_err(|e| NetlinkError::Deserialization(Box::new(e)))?.0;
+                        let stats: RtnlLinkStats64 =
+                            bincode::borrow_decode_from_slice(buf, bincode::config::standard())
+                                .map_err(|e| NetlinkError::Deserialization(Box::new(e)))?
+                                .0;
 
                         return Ok(stats);
                     }
@@ -186,46 +188,40 @@ impl Netlink {
     }
 
     pub fn qdisc_from_ifindex(ifindex: i32) -> Result<Qdisc, NetlinkError> {
-        let mut socket = NlSocketHandle::connect(NlFamily::Route, None, &[])?;
-        let tc_msg = Tcmsg::new(
-            u8::from(RtAddrFamily::Unspecified),
-            0,
-            0,
-            0,
-            0,
-            RtBuffer::new(),
-        );
+        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
+        let tc_msg = TcmsgBuilder::default()
+            .tcm_family(u8::from(RtAddrFamily::Unspecified))
+            .tcm_ifindex(ifindex)
+            .tcm_handle(0)
+            .tcm_parent(0)
+            .tcm_info(0)
+            .rtattrs(RtBuffer::new())
+            .build()
+            .unwrap();
 
-        let nlhdr = Nlmsghdr::new(
-            None,
+        let recv = socket.send::<_, _, Rtm, Tcmsg>(
             Rtm::Getqdisc,
-            NlmFFlags::new(&[NlmF::Request, NlmF::Dump]),
-            None,
-            None,
+            NlmF::REQUEST | NlmF::DUMP,
             NlPayload::Payload(tc_msg),
-        );
+        )?;
 
-        if let Err(e) = socket.send(nlhdr) {
-            return Err(NetlinkError::Serialization(e));
-        }
-
-        for response in socket.iter(false) {
+        for response in recv {
             let header: Nlmsghdr<Rtm, Tcmsg> = response?;
 
-            if let NlPayload::Payload(p) = header.nl_payload {
-                if header.nl_type != Rtm::Newqdisc {
+            if let NlPayload::Payload(p) = header.nl_payload() {
+                if header.nl_type() != &Rtm::Newqdisc {
                     return Err(NetlinkError::WrongType {
                         expected: Rtm::Newqdisc,
-                        found: header.nl_type,
+                        found: *header.nl_type(),
                     });
                 }
 
-                if p.tcm_ifindex == ifindex {
+                if *p.tcm_ifindex() == ifindex {
                     let mut _type = "";
 
-                    for attr in p.rtattrs.iter() {
-                        if attr.rta_type == Tca::Kind {
-                            let buff = attr.rta_payload.as_ref();
+                    for attr in p.rtattrs().iter() {
+                        if attr.rta_type() == &Tca::Kind {
+                            let buff = attr.rta_payload().as_ref();
                             _type = std::str::from_utf8(buff)?.trim_end_matches('\0');
                             // Null terminator is valid UTF-8, but breaks comparison, so we remove it
                         }
