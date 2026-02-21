@@ -32,11 +32,11 @@ pipeline {
 							sh '''
 								export CARGO_HOME="$(pwd)/.cargo"
 								export PATH="$(pwd)/.local/bin:${PATH}"
-								mold -V
 								clang -v
 								gcc -v
 								cargo -V
 								rustc -V
+								mold -V
 								cargo build \
 									--release
 								'''
