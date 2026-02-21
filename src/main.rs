@@ -61,7 +61,7 @@ fn main() -> anyhow::Result<()> {
         IpAddr::from_str("94.140.14.14")?,
     ];
 
-    match reflector_pool_size > 5 {
+    match reflector_pool_size > config.num_reflectors as usize {
         true => {
             let mut peers = reflector_peers_lock.write().unwrap();
             peers.append(default_reflectors.to_vec().as_mut());
@@ -145,7 +145,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut threads = vec![receiver_handle, sender_handle, baseliner_handle];
 
-    if reflector_pool_size > 5 {
+    if reflector_pool_size > config.num_reflectors as usize {
         let reflector_selector = ReflectorSelector {
             config: config.clone(),
             owd_recent: owd_recent.clone(),
