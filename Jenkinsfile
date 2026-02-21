@@ -7,7 +7,7 @@ pipeline {
 				axes {
 					axis {
 						name 'TARGET'
-						values 'x86_64-musl', 'i686-musl', 'arm-musleabi', 'arm-musleabihf', 'armv7-musleabi', 'armv7-musleabihf', 'aarch64-musl', 'mips-musl', 'mipsel-musl', 'mips64-musl', 'mips64el-musl', 'mips64-muslabi64', 'mips64el-muslabi64', 'riscv64gc-musl'
+						values 'x86_64-musl', 'i686-musl', 'arm-musleabi', 'arm-musleabihf', 'armv7-musleabi', 'armv7-musleabihf', 'aarch64-musl', 'mips-musl', 'mipsel-musl', 'mips64-muslabi64', 'mips64el-muslabi64', 'riscv64gc-musl'
 					}
 				}
 
