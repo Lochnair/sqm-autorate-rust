@@ -1,7 +1,7 @@
 use anyhow::Result;
+use log::Level;
 #[cfg(feature = "uci")]
 use log::warn;
-use log::Level;
 #[cfg(feature = "uci")]
 use rust_uci::Uci;
 use std::fs::File;
@@ -21,6 +21,8 @@ pub enum ConfigError {
     ParseError(String),
     #[error("No config value found for key: `{0}`")]
     MissingValue(String),
+    #[error("Reflector list not found at: {0}")]
+    ReflectorListNotFound(String),
 }
 
 fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
@@ -243,7 +245,11 @@ impl Config {
     }
 
     pub fn load_reflectors(&self) -> Result<Vec<IpAddr>> {
-        let lines = read_lines(self.reflector_list_file.clone())?;
+        let lines = read_lines(self.reflector_list_file.clone()).map_err(|e| {
+            ConfigError::ReflectorListNotFound(
+                self.reflector_list_file.clone() + ": " + e.to_string().as_str(),
+            )
+        })?;
 
         let mut reflectors: Vec<IpAddr> = Vec::with_capacity(50);
 
