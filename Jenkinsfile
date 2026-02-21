@@ -34,6 +34,7 @@ pipeline {
 								export PATH="$(pwd)/.local/bin:${PATH}"
 								mold -V
 								clang -v
+								gcc -v
 								cargo -V
 								rustc -V
 								cargo build \
