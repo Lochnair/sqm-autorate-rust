@@ -1,6 +1,6 @@
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;
-use icmp_socket::packet::{IcmpPacketBuildError, WithTimestampRequest};
+use icmp_socket::packet::WithTimestampRequest;
 use icmp_socket::Icmpv4Message;
 use icmp_socket::Icmpv4Packet;
 use rustix::thread::ClockId;
