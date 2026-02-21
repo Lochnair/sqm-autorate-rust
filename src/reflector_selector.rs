@@ -1,7 +1,5 @@
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
-use rand::seq::IndexedRandom;
-use rand::{RngExt, rng};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
@@ -23,8 +21,6 @@ impl ReflectorSelector {
         let mut reselection_count = 0;
         let baseline_sleep_time =
             Duration::from_secs_f64(self.config.tick_interval * std::f64::consts::PI);
-
-        let mut rng = rng();
 
         // Initial wait of several seconds to allow some OWD data to build up
         sleep(baseline_sleep_time);
@@ -57,7 +53,7 @@ impl ReflectorSelector {
             }
 
             for _ in 0..20 {
-                let next_candidate = self.reflector_pool.choose(&mut rng).unwrap();
+                let next_candidate = &self.reflector_pool[fastrand::usize(..self.reflector_pool.len())];
                 if next_peers.contains(next_candidate) {
                     continue;
                 }
@@ -110,7 +106,7 @@ impl ReflectorSelector {
 
             // Shuffle the deck so we avoid overwhelming good reflectors (Fisher-Yates)
             for i in (1_usize..candidates.len()).rev() {
-                let j = rng.random_range(0..(i + 1));
+                let j = fastrand::usize(0..=i);
                 candidates.swap(i, j);
             }
 

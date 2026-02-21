@@ -23,7 +23,7 @@ anyhow = "1.0"
 icmp-socket = "0.4.0"
 netlink-bindings = { version = "0.2", features = ["rt-link", "tc"] }
 netlink-socket2 = "0.2"
-rand = "0.10"
+fastrand = "2"
 rustix = { version = "1.1", features = ["fs", "thread", "time"] }
 rust-uci = { version = "0.1", optional = true }
 thiserror = "2.0"
