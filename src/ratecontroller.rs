@@ -2,7 +2,7 @@ use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::{Config, ReflectorStats};
 use log::{debug, info, warn};
 use rand::seq::IndexedRandom;
-use rand::{rng, Rng};
+use rand::{RngExt, rng};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -12,10 +12,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
+use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::formatting::Formattable;
 use time::macros::format_description;
-use time::OffsetDateTime;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Direction {
@@ -51,7 +51,7 @@ fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
     let mut rates = Vec::new();
 
     for _ in 0..size {
-        rates.push((rng().next_u64() as f64 * 0.2 + 0.75) * base_speed);
+        rates.push((rng().random_range(0.0..1.0) as f64 * 0.2 + 0.75) * base_speed);
     }
 
     rates
@@ -350,7 +350,8 @@ impl Ratecontroller {
                     get_interface_stats(&self.config, self.down_direction, self.up_direction)?;
                 if self.state_dl.current_bytes == -1 || self.state_ul.current_bytes == -1 {
                     warn!(
-                    "One or both Netlink stats could not be read. Skipping rate control algorithm");
+                        "One or both Netlink stats could not be read. Skipping rate control algorithm"
+                    );
                     continue;
                 }
 
