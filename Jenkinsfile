@@ -22,10 +22,30 @@ pipeline {
 					stage('Build') {
 						steps {
 							sh '''
+								# 1. Set CARGO_HOME to a writable directory in the workspace
 								export CARGO_HOME="$(pwd)/.cargo"
-								cargo build \
-									--release
-								'''
+								mkdir -p "$CARGO_HOME"
+								
+								# 2. Add local bin to PATH (for tools you might install)
+								export PATH="$(pwd)/.local/bin:${PATH}"
+
+								# 3. CRITICAL: Copy the cross-compilation config from the image's default location
+								#    The image stores the linker configuration in /root/.cargo/config.toml.
+								#    Without this, Cargo defaults to the host linker (cc) and fails.
+								if [ -f /root/.cargo/config.toml ]; then
+									cp /root/.cargo/config.toml "$CARGO_HOME/config.toml"
+								else
+									echo "WARNING: /root/.cargo/config.toml not found. Build may fail."
+								fi
+
+								# 4. Debug: Verify the config is present and correct
+								echo "--- Active Cargo Configuration ---"
+								cat "$CARGO_HOME/config.toml"
+								echo "----------------------------------"
+
+								# 5. Build
+								cargo build --release
+							'''
 						}
 					}
 
