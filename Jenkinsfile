@@ -43,8 +43,20 @@ pipeline {
 								cat "$CARGO_HOME/config.toml"
 								echo "----------------------------------"
 
-								# 5. Build
-								cargo build --release
+								# 5. Check Toolchain & Build
+                                # We grep for "nightly" in the version string (e.g., "rustc 1.95.0-nightly...")
+                                if rustc -V | grep -q "nightly"; then
+                                    echo "Detected Nightly toolchain. Enabling '-Z build-std' to support panic=abort..."
+                                    
+                                    # Ensure rust-src is installed (needed for build-std)
+                                    # We use '|| true' so it doesn't fail if already installed or network flakes
+                                    rustup component add rust-src || true
+                                    
+                                    cargo build --release -Z build-std=std,panic_abort
+                                else
+                                    echo "Detected Stable toolchain. Building with standard pre-compiled library..."
+                                    cargo build --release
+                                fi
 							'''
 						}
 					}
