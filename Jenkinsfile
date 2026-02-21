@@ -22,6 +22,7 @@ pipeline {
 				agent {
                     docker {
                         image "ghcr.io/rust-cross/rust-musl-cross:${TARGET}"
+						alwaysPull true
                     }
                 }
 
