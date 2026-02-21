@@ -1,31 +1,23 @@
-use bytemuck::AnyBitPattern;
-use bytemuck::checked::{CheckedCastError, try_from_bytes};
-use neli::consts::nl::NlmF;
-use neli::consts::rtnl::{Arphrd, Iff, Ifla, RtAddrFamily, Rtm, Tca};
-use neli::consts::socket::NlFamily;
-use neli::err::{RouterError, SerError};
-use neli::nl::{NlPayload, Nlmsghdr};
-use neli::router::synchronous::NlRouter;
-use neli::rtnl::{Ifinfomsg, IfinfomsgBuilder, RtattrBuilder, Tcmsg, TcmsgBuilder};
-use neli::types::{Buffer, RtBuffer};
-use neli::utils::Groups;
 use std::io;
 use std::str::Utf8Error;
+
+use netlink_bindings::{rt_link, tc};
+use netlink_socket2::NetlinkSocket;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum NetlinkError {
-    #[error("Couldn't deserialize to struct: {0}")]
-    Deserialization(CheckedCastError),
-
-    #[error("Couldn't find intreface `{0}`")]
+    #[error("Couldn't find interface `{0}`")]
     InterfaceNotFound(String),
 
-    #[error("Netlink interface error")]
-    NlInterfaceError(#[from] RouterError<Rtm, Ifinfomsg>),
+    #[error("Netlink error: {0}")]
+    Netlink(#[from] io::Error),
+
+    #[error("Netlink reply error: {0}")]
+    Reply(#[from] netlink_socket2::ReplyError),
 
     #[error("Something went wrong while finding qdisc")]
-    NlQdiscError(#[from] RouterError<Rtm, Tcmsg>),
+    NlQdiscError(String),
 
     #[error("Couldn't find CAKE qdisc on interface `{0}`")]
     NoQdiscFound(String),
@@ -33,150 +25,49 @@ pub enum NetlinkError {
     #[error("Couldn't find interface statistics: `{0}`")]
     NoInterfaceStatsFound(String),
 
-    #[error("Couldn't open Netlink socket")]
-    OpenSocket(#[from] io::Error),
-
-    #[error("Serialization error")]
-    Serialization(#[from] SerError),
-
     #[error("Error happened while parsing UTF-8 string")]
     Utf8Error(#[from] Utf8Error),
 
-    #[error("Invalid Rtm type (expected {expected:?}, found {found:?})")]
-    WrongType { expected: Rtm, found: Rtm },
+    #[error("Invalid reply type")]
+    InvalidReply,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Qdisc {
-    ifindex: i32,
-    parent: u32,
-}
-
-#[derive(AnyBitPattern, Copy, Clone, Default, Debug)]
-#[repr(C)]
-pub struct RtnlLinkStats64 {
-    pub rx_packets: u64,
-    pub tx_packets: u64,
-    pub rx_bytes: u64,
-    pub tx_bytes: u64,
-    pub rx_errors: u64,
-    pub tx_errors: u64,
-    pub rx_dropped: u64,
-    pub tx_dropped: u64,
-    pub multicast: u64,
-    pub collisions: u64,
-    pub rx_length_errors: u64,
-    pub rx_over_errors: u64,
-    pub rx_crc_errors: u64,
-    pub rx_frame_errors: u64,
-    pub rx_fifo_errors: u64,
-    pub rx_missed_errors: u64,
-    pub tx_aborted_errors: u64,
-    pub tx_carrier_errors: u64,
-    pub tx_fifo_errors: u64,
-    pub tx_heartbeat_errors: u64,
-    pub tx_window_errors: u64,
-    pub rx_compressed: u64,
-    pub tx_compressed: u64,
-    pub rx_nohandler: u64,
-}
-
-pub enum TcaCake {
-    BaseRate64 = 2,
+    pub ifindex: i32,
+    pub parent: u32,
 }
 
 pub struct Netlink {}
 
 impl Netlink {
-    fn nl_interface_get(
-        socket: &NlRouter,
-        ifname: &str,
-    ) -> Result<neli::router::synchronous::NlRouterReceiverHandle<Rtm, Ifinfomsg>, NetlinkError>
-    {
-        let mut attrs = RtBuffer::new();
-
-        const RTEXT_FILTER_VF: i32 = 1 << 0;
-
-        let attr_ifname = RtattrBuilder::default()
-            .rta_type(Ifla::Ifname)
-            .rta_payload(ifname)
-            .build()
-            .unwrap();
-        let attr_ext_mask = RtattrBuilder::default()
-            .rta_type(Ifla::ExtMask)
-            .rta_payload(RTEXT_FILTER_VF)
-            .build()
-            .unwrap();
-        attrs.push(attr_ifname);
-        attrs.push(attr_ext_mask);
-
-        let if_msg = IfinfomsgBuilder::default()
-            .ifi_family(RtAddrFamily::Unspecified)
-            .ifi_type(Arphrd::None)
-            .ifi_index(-1)
-            .ifi_flags(Iff::empty())
-            .ifi_change(Iff::empty())
-            .rtattrs(attrs)
-            .build()
-            .unwrap();
-
-        let recv = socket.send::<_, _, Rtm, Ifinfomsg>(
-            Rtm::Getlink,
-            NlmF::REQUEST | NlmF::ACK,
-            NlPayload::Payload(if_msg),
-        )?;
-
-        Ok(recv)
-    }
-
     pub fn find_interface(ifname: &str) -> Result<i32, NetlinkError> {
-        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
+        let mut socket = NetlinkSocket::new();
 
-        let recv = Self::nl_interface_get(&socket, ifname)?;
+        let mut request = rt_link::Request::new()
+            .op_getlink_do_request(&Default::default());
+        request.encode().push_ifname_bytes(ifname.as_bytes());
 
-        for response in recv {
-            let header: Nlmsghdr<Rtm, Ifinfomsg> = response?;
-
-            if header.nl_type() != &Rtm::Newlink {
-                return Err(NetlinkError::WrongType {
-                    expected: Rtm::Newlink,
-                    found: *header.nl_type(),
-                });
-            }
-
-            if let NlPayload::Payload(p) = header.nl_payload() {
-                return Ok(*p.ifi_index());
-            }
-        }
-
-        // we shouldn't reach here
-        Err(NetlinkError::InterfaceNotFound(ifname.to_string()))
+        let mut iter = socket.request(&request)?;
+        let (header, _) = iter.recv_one()?;
+        Ok(header.ifi_index())
     }
 
-    pub fn get_interface_stats(ifname: &str) -> Result<RtnlLinkStats64, NetlinkError> {
-        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
+    pub fn get_interface_stats(ifname: &str) -> Result<(u64, u64), NetlinkError> {
+        let mut socket = NetlinkSocket::new();
 
-        let recv = Self::nl_interface_get(&socket, ifname)?;
+        let mut request = rt_link::Request::new()
+            .op_getlink_do_request(&Default::default());
+        request.encode()
+            .push_ifname_bytes(ifname.as_bytes())
+            .push_ext_mask(1 /* RTEXT_FILTER_VF */);
 
-        for response in recv {
-            let header: Nlmsghdr<Rtm, Ifinfomsg> = response?;
-
-            if header.nl_type() != &Rtm::Newlink {
-                return Err(NetlinkError::WrongType {
-                    expected: Rtm::Newlink,
-                    found: *header.nl_type(),
-                });
-            }
-
-            if let NlPayload::Payload(p) = header.nl_payload() {
-                for attr in p.rtattrs().iter() {
-                    if attr.rta_type() == &Ifla::Stats64 {
-                        let buf = attr.rta_payload().as_ref();
-                        let stats: &RtnlLinkStats64 = try_from_bytes::<RtnlLinkStats64>(buf)
-                            .map_err(|e| NetlinkError::Deserialization(e))?;
-
-                        return Ok(stats.clone());
-                    }
+        let mut iter = socket.request(&request)?;
+        while let Some(reply) = iter.recv() {
+            let (_, attrs) = reply?;
+            for attr in attrs {
+                if let Ok(rt_link::OpGetlinkDoReply::Stats64(stats)) = attr {
+                    return Ok((stats.rx_bytes(), stats.tx_bytes()));
                 }
             }
         }
@@ -185,55 +76,30 @@ impl Netlink {
     }
 
     pub fn qdisc_from_ifindex(ifindex: i32) -> Result<Qdisc, NetlinkError> {
-        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
-        let tc_msg = TcmsgBuilder::default()
-            .tcm_family(u8::from(RtAddrFamily::Unspecified))
-            .tcm_ifindex(ifindex)
-            .tcm_handle(0)
-            .tcm_parent(0)
-            .tcm_info(0)
-            .rtattrs(RtBuffer::new())
-            .build()
-            .unwrap();
+        let mut socket = NetlinkSocket::new();
+        let header = tc::PushTcmsg::new();
+        let request = tc::Request::new().op_getqdisc_dump_request(&header);
 
-        let recv = socket.send::<_, _, Rtm, Tcmsg>(
-            Rtm::Getqdisc,
-            NlmF::REQUEST | NlmF::DUMP,
-            NlPayload::Payload(tc_msg),
-        )?;
+        let mut iter = socket.request(&request)?;
+        while let Some(reply) = iter.recv() {
+            let (header, attrs) = reply?;
 
-        for response in recv {
-            let header: Nlmsghdr<Rtm, Tcmsg> = response?;
-
-            if let NlPayload::Payload(p) = header.nl_payload() {
-                if header.nl_type() != &Rtm::Newqdisc {
-                    return Err(NetlinkError::WrongType {
-                        expected: Rtm::Newqdisc,
-                        found: *header.nl_type(),
-                    });
-                }
-
-                if *p.tcm_ifindex() == ifindex {
-                    let mut _type = "";
-
-                    for attr in p.rtattrs().iter() {
-                        if attr.rta_type() == &Tca::Kind {
-                            let buff = attr.rta_payload().as_ref();
-                            _type = std::str::from_utf8(buff)?.trim_end_matches('\0');
-                            // Null terminator is valid UTF-8, but breaks comparison, so we remove it
+            if header.ifindex() == ifindex {
+                let mut is_cake = false;
+                for attr in attrs {
+                    if let Ok(tc::OpGetqdiscDumpReply::Kind(kind)) = attr {
+                        if kind.to_str().map_err(|_| NetlinkError::NlQdiscError("Invalid UTF-8".to_string()))? == "cake" {
+                            is_cake = true;
+                            break;
                         }
                     }
+                }
 
-                    let type_to_look_for = "cake";
-
-                    if _type.eq(type_to_look_for) {
-                        let qdisc = Qdisc {
-                            ifindex: *p.tcm_ifindex() as i32,
-                            parent: *p.tcm_parent(),
-                        };
-
-                        return Ok(qdisc);
-                    }
+                if is_cake {
+                    return Ok(Qdisc {
+                        ifindex,
+                        parent: header.parent(),
+                    });
                 }
             }
         }
@@ -247,53 +113,24 @@ impl Netlink {
     }
 
     pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64) -> Result<(), NetlinkError> {
-        let (socket, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty()).unwrap();
+        let mut socket = NetlinkSocket::new();
         let bandwidth = bandwidth_kbit * 1000 / 8;
 
-        let mut attrs = RtBuffer::new();
+        let mut header = tc::PushTcmsg::new();
+        header.set_ifindex(qdisc.ifindex);
+        header.set_parent(qdisc.parent);
 
-        let attr_type = RtattrBuilder::default()
-            .rta_type(Tca::Kind)
-            .rta_payload("cake")
-            .build()
-            .unwrap();
-        let attr_options = RtattrBuilder::default()
-            .rta_type(Tca::Options)
-            .rta_payload(Buffer::from(Vec::new()))
-            .build()
-            .unwrap()
-            .nest(
-                &RtattrBuilder::default()
-                    .rta_type(TcaCake::BaseRate64 as u16)
-                    .rta_payload(bandwidth)
-                    .build()
-                    .unwrap(),
-            )?;
+        let mut request = tc::Request::new()
+            .set_change()
+            .op_newqdisc_do_request(&header);
+        request.encode()
+            .push_kind(c"cake")
+            .nested_options_cake()
+            .push_base_rate64(bandwidth)
+            .end_nested();
 
-        attrs.push(attr_type);
-        attrs.push(attr_options);
-
-        let tc_msg = TcmsgBuilder::default()
-            .tcm_family(u8::from(RtAddrFamily::Unspecified))
-            .tcm_ifindex(qdisc.ifindex)
-            .tcm_handle(0)
-            .tcm_parent(qdisc.parent)
-            .tcm_info(0)
-            .rtattrs(attrs)
-            .build()
-            .unwrap();
-
-        let recv = socket
-            .send::<_, _, Rtm, Tcmsg>(
-                Rtm::Newqdisc,
-                NlmF::REQUEST | NlmF::ACK,
-                NlPayload::Payload(tc_msg),
-            )
-            .map_err(|e| NetlinkError::NlQdiscError(e))?;
-
-        for msg in recv {
-            let _ = msg?;
-        }
+        let mut iter = socket.request(&request)?;
+        iter.recv_ack()?;
 
         Ok(())
     }

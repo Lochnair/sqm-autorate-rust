@@ -62,10 +62,8 @@ fn get_interface_stats(
     down_direction: StatsDirection,
     up_direction: StatsDirection,
 ) -> Result<(i128, i128), RatecontrolError> {
-    let down_stats = Netlink::get_interface_stats(config.download_interface.as_str())?;
-    let up_stats = Netlink::get_interface_stats(config.upload_interface.as_str())?;
-    let (down_rx, down_tx) = (down_stats.rx_bytes, down_stats.tx_bytes);
-    let (up_rx, up_tx) = (up_stats.rx_bytes, up_stats.tx_bytes);
+    let (down_rx, down_tx) = Netlink::get_interface_stats(config.download_interface.as_str())?;
+    let (up_rx, up_tx) = Netlink::get_interface_stats(config.upload_interface.as_str())?;
 
     let rx_bytes = match down_direction {
         StatsDirection::RX => down_rx,
