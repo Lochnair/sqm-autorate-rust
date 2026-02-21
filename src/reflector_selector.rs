@@ -1,7 +1,7 @@
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
 use rand::seq::IndexedRandom;
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::Receiver;
@@ -102,7 +102,7 @@ impl ReflectorSelector {
             // Now we will just limit the candidates down to 2 * num_reflectors
             let mut num_reflectors = self.config.num_reflectors;
             let candidate_pool_num = (2 * num_reflectors) as usize;
-            candidates = candidates[0..candidate_pool_num - 1].to_vec();
+            candidates.truncate(candidate_pool_num);
 
             for (candidate, rtt) in candidates.iter() {
                 info!("Fastest candidate {}: {}", candidate, rtt);
