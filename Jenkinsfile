@@ -6,7 +6,7 @@ pipeline {
 			steps {
 				sh '''
 				    mkdir -p .local
-					curl -L -s https://github.com/rui314/mold/releases/download/v2.39.0/mold-2.39.0-x86_64-linux.tar.gz | tar -xzv --strip-components=1 -C .local/
+					curl -L -s https://github.com/rui314/mold/releases/download/v2.40.4/mold-2.40.4-x86_64-linux.tar.gz | tar -xzv --strip-components=1 -C .local/
 				'''
 			}
 		}
@@ -32,7 +32,10 @@ pipeline {
 							sh '''
 								export CARGO_HOME="$(pwd)/.cargo"
 								export PATH="$(pwd)/.local/bin:${PATH}"
-								printenv | sort
+								mold -V
+								clang -v
+								cargo -V
+								rustc -V
 								cargo build \
 									--release
 								'''
