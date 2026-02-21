@@ -33,6 +33,7 @@ pipeline {
 								export CARGO_HOME="$(pwd)/.cargo"
 								export PATH="$(pwd)/.local/bin:${PATH}"
 								ls -l /usr/local/musl/bin
+								$TARGET_CC -v
 								clang -v
 								gcc -v
 								cargo -V
