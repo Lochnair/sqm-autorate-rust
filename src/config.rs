@@ -75,6 +75,7 @@ pub struct Config {
     pub min_change_interval: f64,
     pub measurement_type: MeasurementType,
     pub num_reflectors: u8,
+    pub peer_reselection_time: u64,
     pub reflector_list_file: String,
     pub speed_hist_size: u32,
     pub tick_interval: f64,
@@ -161,6 +162,11 @@ impl Config {
                 "SQMA_NUM_REFLECTORS",
                 "sqm-autorate.@advanced_settings[0].num_reflectors",
                 Some(5),
+            )?,
+            peer_reselection_time: Self::get::<u64>(
+                "SQMA_PEER_RESELECTION_TIME",
+                "sqm-autorate.@advanced_settings[0].peer_reselection_time",
+                Some(15),
             )?,
             reflector_list_file: Self::get::<String>(
                 "SQMA_REFLECTOR_LIST_FILE",
