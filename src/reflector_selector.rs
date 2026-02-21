@@ -44,7 +44,7 @@ impl ReflectorSelector {
 
             // After 40 reselections, slow down to every 15 minutes
             if reselection_count > 40 {
-                selector_sleep_time = Duration::new(15 * 60, 0);
+                selector_sleep_time = Duration::new(self.config.peer_reselection_time * 60, 0);
             }
 
             let mut next_peers: Vec<IpAddr> = Vec::new();
