@@ -28,8 +28,6 @@ pub enum NetlinkError {
     #[error("Error happened while parsing UTF-8 string")]
     Utf8Error(#[from] Utf8Error),
 
-    #[error("Invalid reply type")]
-    InvalidReply,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,7 +47,8 @@ impl Netlink {
         request.encode().push_ifname_bytes(ifname.as_bytes());
 
         let mut iter = socket.request(&request)?;
-        let (header, _) = iter.recv_one()?;
+        let (header, _) = iter.recv_one()
+            .map_err(|_| NetlinkError::InterfaceNotFound(ifname.to_string()))?;
         Ok(header.ifi_index())
     }
 
@@ -75,7 +74,7 @@ impl Netlink {
         Err(NetlinkError::NoInterfaceStatsFound(ifname.to_string()))
     }
 
-    pub fn qdisc_from_ifindex(ifindex: i32) -> Result<Qdisc, NetlinkError> {
+    pub fn qdisc_from_ifindex(ifindex: i32, ifname: &str) -> Result<Qdisc, NetlinkError> {
         let mut socket = NetlinkSocket::new();
         let header = tc::PushTcmsg::new();
         let request = tc::Request::new().op_getqdisc_dump_request(&header);
@@ -104,12 +103,12 @@ impl Netlink {
             }
         }
 
-        Err(NetlinkError::NoQdiscFound(ifindex.to_string()))
+        Err(NetlinkError::NoQdiscFound(ifname.to_string()))
     }
 
     pub fn qdisc_from_ifname(ifname: &str) -> Result<Qdisc, NetlinkError> {
         let ifindex = Netlink::find_interface(ifname)?;
-        Netlink::qdisc_from_ifindex(ifindex)
+        Netlink::qdisc_from_ifindex(ifindex, ifname)
     }
 
     pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64) -> Result<(), NetlinkError> {
