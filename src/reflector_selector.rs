@@ -56,8 +56,11 @@ impl ReflectorSelector {
                 next_peers.push(*reflector);
             }
 
-            for _ in 1..20 {
+            for _ in 0..20 {
                 let next_candidate = self.reflector_pool.choose(&mut rng).unwrap();
+                if next_peers.contains(next_candidate) {
+                    continue;
+                }
                 debug!("Next candidate: {}", next_candidate.to_string());
                 next_peers.push(*next_candidate);
             }
