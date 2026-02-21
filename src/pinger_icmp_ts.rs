@@ -1,49 +1,11 @@
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;
-use icmp_socket::packet::IcmpPacketBuildError;
+use icmp_socket::packet::{IcmpPacketBuildError, WithTimestampRequest};
 use icmp_socket::Icmpv4Message;
 use icmp_socket::Icmpv4Packet;
 use rustix::thread::ClockId;
 use std::net::IpAddr;
 use std::time::Instant;
-
-/// Construct a packet for the TimestampRequest messages.
-pub trait WithTimestampRequest {
-    type Packet;
-
-    fn with_timestamp_request(
-        identifier: u16,
-        sequence: u16,
-        originate: u32,
-        receive: u32,
-        transmit: u32,
-    ) -> Result<Self::Packet, IcmpPacketBuildError>;
-}
-
-impl WithTimestampRequest for Icmpv4Packet {
-    type Packet = Icmpv4Packet;
-
-    fn with_timestamp_request(
-        identifier: u16,
-        sequence: u16,
-        originate: u32,
-        receive: u32,
-        transmit: u32,
-    ) -> Result<Self::Packet, IcmpPacketBuildError> {
-        Ok(Self {
-            typ: 13,
-            code: 0,
-            checksum: 0,
-            message: Icmpv4Message::Timestamp {
-                identifier,
-                sequence,
-                originate,
-                receive,
-                transmit,
-            },
-        })
-    }
-}
 
 pub struct PingerICMPTimestampListener {}
 
