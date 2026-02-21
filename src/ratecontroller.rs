@@ -151,53 +151,48 @@ impl Ratecontroller {
         if !state.deltas.is_empty() {
             state.next_rate = state.current_rate;
 
-            if state.deltas.len() < 3 {
-                state.next_rate = min_rate;
+            state.delta_stat = if state.deltas.len() >= 3 {
+                state.deltas[2]
             } else {
-                state.delta_stat = if state.deltas[2] > 0.0 {
-                    state.deltas[2]
-                } else {
-                    state.deltas[0]
-                };
+                state.deltas[0]
+            };
 
-                if state.delta_stat > 0.0 {
-                    /*
-                     * TODO - find where the (8 / 1000) comes from and
-                     *    i. convert to a pre-computed factor
-                     *    ii. ideally, see if it can be defined in terms of constants, eg ticks per second and number of active reflectors
-                     */
-                    state.utilisation = (8.0 / 1000.0)
-                        * (state.current_bytes as f64 - state.previous_bytes as f64)
-                        / dur.as_secs_f64();
-                    state.load = state.utilisation / state.current_rate;
+            if state.delta_stat > 0.0 {
+                /*
+                 * TODO - find where the (8 / 1000) comes from and
+                 *    i. convert to a pre-computed factor
+                 *    ii. ideally, see if it can be defined in terms of constants, eg ticks per second and number of active reflectors
+                 */
+                state.utilisation = (8.0 / 1000.0)
+                    * (state.current_bytes as f64 - state.previous_bytes as f64)
+                    / dur.as_secs_f64();
+                state.load = state.utilisation / state.current_rate;
 
-                    if state.delta_stat > 0.0
-                        && state.delta_stat < delay_ms
-                        && state.load > self.config.high_load_level
-                    {
-                        state.safe_rates[state.nrate] = (state.current_rate * state.load).round();
-                        let max_rate = state
-                            .safe_rates
-                            .iter()
-                            .max_by(|a, b| a.total_cmp(b))
-                            .unwrap();
-                        state.next_rate = state.current_rate
-                            * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
-                            + (base_rate * 0.03);
-                        state.nrate += 1;
-                        state.nrate %= self.config.speed_hist_size as usize;
-                    }
+                if state.delta_stat < delay_ms
+                    && state.load > self.config.high_load_level
+                {
+                    state.safe_rates[state.nrate] = (state.current_rate * state.load).round();
+                    let max_rate = state
+                        .safe_rates
+                        .iter()
+                        .max_by(|a, b| a.total_cmp(b))
+                        .unwrap();
+                    state.next_rate = state.current_rate
+                        * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
+                        + (base_rate * 0.03);
+                    state.nrate += 1;
+                    state.nrate %= self.config.speed_hist_size as usize;
+                }
 
-                    if state.delta_stat > delay_ms {
-                        let mut rng = rng();
-                        match state.safe_rates.choose(&mut rng) {
-                            Some(rnd_rate) => {
-                                state.next_rate =
-                                    rnd_rate.min(0.9 * state.current_rate * state.load);
-                            }
-                            None => {
-                                state.next_rate = 0.9 * state.current_rate * state.load;
-                            }
+                if state.delta_stat > delay_ms {
+                    let mut rng = rng();
+                    match state.safe_rates.choose(&mut rng) {
+                        Some(rnd_rate) => {
+                            state.next_rate =
+                                rnd_rate.min(0.9 * state.current_rate * state.load);
+                        }
+                        None => {
+                            state.next_rate = 0.9 * state.current_rate * state.load;
                         }
                     }
                 }
