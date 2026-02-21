@@ -20,7 +20,7 @@ strip = "symbols"
 
 [dependencies]
 anyhow = "1.0"
-bincode = "2.0"
+bincode = "3.0"
 icmp-socket = "0.4.0"
 neli = "0.7"
 rand = "0.10"
