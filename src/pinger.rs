@@ -79,7 +79,10 @@ pub trait PingListener {
             };
 
             debug!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}", "ICMP", addr.to_string(), reply.seq, reply.current_time, reply.originate_timestamp, reply.receive_timestamp, reply.transmit_timestamp, reply.rtt, reply.up_time, reply.down_time);
-            stats_sender.send(reply).unwrap();
+            if let Err(e) = stats_sender.send(reply) {
+                warn!("Stats channel closed, stopping listener: {}", e);
+                break Ok(());
+            }
         }
     }
 
