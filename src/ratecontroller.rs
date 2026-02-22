@@ -332,6 +332,26 @@ impl Ratecontroller {
                 }
 
                 self.update_deltas();
+
+                if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
+                    warn!("No reflector data available, dropping to minimum rates");
+                    self.state_dl.next_rate = self.config.download_min_kbits;
+                    self.state_ul.next_rate = self.config.upload_min_kbits;
+
+                    Netlink::set_qdisc_rate(
+                        self.state_dl.qdisc,
+                        self.state_dl.next_rate as u64,
+                    )?;
+                    Netlink::set_qdisc_rate(
+                        self.state_ul.qdisc,
+                        self.state_ul.next_rate as u64,
+                    )?;
+
+                    self.state_dl.current_rate = self.state_dl.next_rate;
+                    self.state_ul.current_rate = self.state_ul.next_rate;
+                    continue;
+                }
+
                 self.calculate_rate(Direction::Down)?;
                 self.calculate_rate(Direction::Up)?;
 
