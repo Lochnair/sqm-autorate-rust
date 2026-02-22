@@ -74,7 +74,6 @@ impl ReflectorSelector {
 
             // Re-acquire the lock when we wake up again
             reflectors_peers = self.reflector_peers_lock.write().unwrap();
-            reflectors_peers.len();
 
             let mut candidates = Vec::new();
             let owd_recent = self.owd_recent.lock().unwrap();
