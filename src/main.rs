@@ -65,12 +65,12 @@ fn main() -> anyhow::Result<()> {
     match reflector_pool_size > config.num_reflectors as usize {
         true => {
             let mut peers = reflector_peers_lock.write().unwrap();
-            peers.append(default_reflectors.to_vec().as_mut());
+            peers.extend_from_slice(&default_reflectors);
             reflector_pool.append(reflectors.as_mut());
         }
         false => {
             let mut peers = reflector_peers_lock.write().unwrap();
-            peers.append(default_reflectors.to_vec().as_mut());
+            peers.extend_from_slice(&default_reflectors);
         }
     }
 
