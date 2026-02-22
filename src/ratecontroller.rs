@@ -153,7 +153,7 @@ impl Ratecontroller {
                 if state.delta_stat < delay_ms
                     && state.load > self.config.high_load_level
                 {
-                    state.safe_rates[state.nrate] = (state.current_rate * state.load).round();
+                    state.safe_rates[state.nrate] = (state.current_rate * state.load).floor();
                     let max_rate = state
                         .safe_rates
                         .iter()
@@ -180,7 +180,7 @@ impl Ratecontroller {
             }
         }
 
-        state.next_rate = state.next_rate.max(min_rate).round();
+        state.next_rate = state.next_rate.max(min_rate).floor();
         state.previous_bytes = state.current_bytes;
         state.prev_t = now_t;
 
