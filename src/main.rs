@@ -123,28 +123,46 @@ fn main() -> anyhow::Result<()> {
     );
     sleep(settle_sleep_time);
 
+    let (error_tx, error_rx) = channel::<anyhow::Error>();
+
+    let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    let receiver_handle = thread::Builder::new().name("receiver".to_string()).spawn(
-        move || -> anyhow::Result<()> {
-            pinger_receiver.listen(
+    thread::Builder::new().name("receiver".to_string()).spawn(
+        move || {
+            if let Err(e) = pinger_receiver.listen(
                 id,
                 config.measurement_type,
                 reflector_peers_lock_clone,
                 baseliner_stats_sender,
-            )
-        },
-    )?;
-    let baseliner_handle = thread::Builder::new()
-        .name("baseliner".to_string())
-        .spawn(move || -> anyhow::Result<()> { baseliner.run() })?;
-    let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    let sender_handle = thread::Builder::new().name("sender".to_string()).spawn(
-        move || -> anyhow::Result<()> {
-            pinger_sender.send(id, config.measurement_type, reflector_peers_lock_clone, config.tick_interval)
+            ) {
+                let _ = err_tx.send(e);
+            }
         },
     )?;
 
-    let mut threads = vec![receiver_handle, sender_handle, baseliner_handle];
+    let err_tx = error_tx.clone();
+    thread::Builder::new()
+        .name("baseliner".to_string())
+        .spawn(move || {
+            if let Err(e) = baseliner.run() {
+                let _ = err_tx.send(e);
+            }
+        })?;
+
+    let err_tx = error_tx.clone();
+    let reflector_peers_lock_clone = reflector_peers_lock.clone();
+    thread::Builder::new().name("sender".to_string()).spawn(
+        move || {
+            if let Err(e) = pinger_sender.send(
+                id,
+                config.measurement_type,
+                reflector_peers_lock_clone,
+                config.tick_interval,
+            ) {
+                let _ = err_tx.send(e);
+            }
+        },
+    )?;
 
     if reflector_pool_size > config.num_reflectors as usize {
         let reflector_selector = ReflectorSelector {
@@ -154,10 +172,14 @@ fn main() -> anyhow::Result<()> {
             reflector_pool,
             trigger_channel: reselect_receiver,
         };
-        let reselection_handle = thread::Builder::new()
+        let err_tx = error_tx.clone();
+        thread::Builder::new()
             .name("reselection".to_string())
-            .spawn(move || reflector_selector.run())?;
-        threads.push(reselection_handle);
+            .spawn(move || {
+                if let Err(e) = reflector_selector.run() {
+                    let _ = err_tx.send(e);
+                }
+            })?;
     }
 
     // Sleep 10 seconds before we start adjusting speeds
@@ -198,15 +220,21 @@ fn main() -> anyhow::Result<()> {
         config.upload_interface, ul_direction
     );
 
-    let ratecontroller_handle = thread::Builder::new()
+    let err_tx = error_tx.clone();
+    thread::Builder::new()
         .name("ratecontroller".to_string())
-        .spawn(move || ratecontroller.run())?;
+        .spawn(move || {
+            if let Err(e) = ratecontroller.run() {
+                let _ = err_tx.send(e);
+            }
+        })?;
 
-    threads.push(ratecontroller_handle);
+    // Drop original sender so recv() unblocks if all threads exit cleanly
+    drop(error_tx);
 
-    for thread in threads {
-        thread.join().expect("Error happened in thread")?;
+    // Wait for first error
+    match error_rx.recv() {
+        Ok(e) => Err(anyhow::anyhow!("thread exited with error: {e}")),
+        Err(_) => Ok(()), // all senders dropped = all threads exited without error
     }
-
-    Ok(())
 }
