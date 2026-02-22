@@ -20,6 +20,18 @@ impl Time {
         (self.time_s as i64 % 86400 * 1000) + (self.time_ns as i64 / 1000000)
     }
 
+    pub fn secs(&self) -> u64 {
+        self.time_s
+    }
+
+    pub fn nsecs(&self) -> u64 {
+        self.time_ns
+    }
+
+    pub fn as_secs_f64(&self) -> f64 {
+        self.time_s as f64 + self.time_ns as f64 / 1_000_000_000.0
+    }
+
     pub fn to_milliseconds(&self) -> u64 {
         (self.time_s * 1000) + (self.time_ns / 1000000)
     }
