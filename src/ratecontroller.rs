@@ -1,5 +1,6 @@
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::time::Time;
+use crate::util::{MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info, warn};
 use rustix::thread::ClockId;

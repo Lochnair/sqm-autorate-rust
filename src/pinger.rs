@@ -1,7 +1,8 @@
 use crate::MeasurementType;
 use icmp_socket::socket::IcmpSocket;
 use icmp_socket::{IcmpSocket4, Icmpv4Packet};
-use log::{debug};
+use crate::util::RwLockExt;
+use log::{debug, warn};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};

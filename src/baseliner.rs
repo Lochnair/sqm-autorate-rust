@@ -1,4 +1,5 @@
 use crate::pinger::PingReply;
+use crate::util::MutexExt;
 use crate::Config;
 use log::info;
 use std::collections::HashMap;
