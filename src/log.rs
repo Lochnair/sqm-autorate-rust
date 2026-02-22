@@ -1,26 +1,11 @@
-use std::time::SystemTime;
-
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
-use time::format_description::FormatItem;
-use time::formatting::Formattable;
-use time::macros::format_description;
-use time::OffsetDateTime;
+use rustix::thread::ClockId;
 
-const LOG_DATETIME_FORMAT: &[FormatItem] = format_description!(
-    "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour \
-         sign:mandatory]:[offset_minute]:[offset_second]"
-);
+use crate::time::Time;
 
 #[derive(Clone, Copy)]
 pub struct SimpleLogger {
     pub level: Level,
-}
-
-fn time_format<T>(dt: T, format: &(impl Formattable + ?Sized)) -> String
-where
-    T: Into<OffsetDateTime>,
-{
-    dt.into().format(format).unwrap()
 }
 
 impl log::Log for SimpleLogger {
@@ -30,9 +15,10 @@ impl log::Log for SimpleLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
+            let now = Time::new(ClockId::Realtime);
             println!(
                 "{} {:5} {}:{}: {}",
-                time_format(SystemTime::now(), &LOG_DATETIME_FORMAT),
+                now.as_secs_f64(),
                 record.level(),
                 record.file().unwrap(),
                 record.line().unwrap(),
