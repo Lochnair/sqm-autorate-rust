@@ -1,6 +1,8 @@
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
+use crate::time::Time;
 use crate::{Config, ReflectorStats};
 use log::{debug, info, warn};
+use rustix::thread::ClockId;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -8,12 +10,8 @@ use std::net::IpAddr;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use thiserror::Error;
-use time::OffsetDateTime;
-use time::format_description::FormatItem;
-use time::formatting::Formattable;
-use time::macros::format_description;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Direction {
@@ -31,18 +29,6 @@ pub enum RatecontrolError {
 pub enum StatsDirection {
     RX,
     TX,
-}
-
-const DUMP_DATETIME_FORMAT: &[FormatItem] = format_description!(
-    "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour \
-         sign:mandatory]:[offset_minute]:[offset_second]"
-);
-
-fn time_format<T>(dt: T, format: &(impl Formattable + ?Sized)) -> String
-where
-    T: Into<OffsetDateTime>,
-{
-    dt.into().format(format).unwrap()
 }
 
 fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
@@ -369,28 +355,31 @@ impl Ratecontroller {
                 self.state_dl.current_rate = self.state_dl.next_rate;
                 self.state_ul.current_rate = self.state_ul.next_rate;
 
+                let stats_time = Time::new(ClockId::Realtime);
                 debug!(
-                    "{},{},{},{},{},{},{}",
-                    time_format(SystemTime::now(), DUMP_DATETIME_FORMAT),
+                    "{},{},{},{},{},{},{},{}",
+                    stats_time.secs(),
+                    stats_time.nsecs(),
                     self.state_dl.load,
                     self.state_ul.load,
                     self.state_dl.delta_stat,
                     self.state_ul.delta_stat,
-                    self.state_dl.current_rate,
-                    self.state_ul.current_rate
+                    self.state_dl.current_rate as u64,
+                    self.state_ul.current_rate as u64
                 );
 
                 if let Some(ref mut fd) = stats_fd {
                     if let Err(e) = fd.write(
                         format!(
-                            "{},{},{},{},{},{},{}\n",
-                            time_format(SystemTime::now(), DUMP_DATETIME_FORMAT),
+                            "{},{},{},{},{},{},{},{}\n",
+                            stats_time.secs(),
+                            stats_time.nsecs(),
                             self.state_dl.load,
                             self.state_ul.load,
                             self.state_dl.delta_stat,
                             self.state_ul.delta_stat,
-                            self.state_dl.current_rate,
-                            self.state_ul.current_rate
+                            self.state_dl.current_rate as u64,
+                            self.state_ul.current_rate as u64
                         )
                         .as_bytes(),
                     ) {
@@ -404,10 +393,11 @@ impl Ratecontroller {
             if let Some(ref mut fd) = speed_hist_fd {
                 if now_t.duration_since(lastdump_t).as_secs_f64() > 300.0 {
                     for i in 0..self.config.speed_hist_size as usize {
+                        let hist_time = Time::new(ClockId::Realtime);
                         if let Err(e) = fd.write_all(
                             format!(
                                 "{},{},{},{}\n",
-                                time_format(SystemTime::now(), DUMP_DATETIME_FORMAT),
+                                hist_time.as_secs_f64(),
                                 i,
                                 self.state_ul.safe_rates[i],
                                 self.state_dl.safe_rates[i]
