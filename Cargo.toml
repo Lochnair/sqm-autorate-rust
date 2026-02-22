@@ -33,10 +33,6 @@ libc = "0.2"
 features = ["std"]
 version = "0.4"
 
-[dependencies.time]
-features = ["formatting", "macros"]
-version = "0.3"
-
 [features]
 uci = ["dep:rust-uci"]
 
