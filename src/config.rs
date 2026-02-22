@@ -61,8 +61,10 @@ pub struct Config {
     pub download_interface: String,
     pub upload_interface: String,
     pub download_base_kbits: f64,
+    pub download_min_percent: f64,
     pub download_min_kbits: f64,
     pub upload_base_kbits: f64,
+    pub upload_min_percent: f64,
     pub upload_min_kbits: f64,
 
     // Output section
@@ -86,7 +88,7 @@ pub struct Config {
 
 impl Config {
     pub fn new() -> Result<Self> {
-        Ok(Self {
+        let config = Self {
             // Network section
             download_base_kbits: Self::get::<f64>(
                 "SQMA_DOWNLOAD_BASE_KBITS",
@@ -98,11 +100,8 @@ impl Config {
                 "sqm-autorate.@network[0].download_interface",
                 None,
             )?,
-            download_min_kbits: Self::get::<f64>(
-                "SQMA_DOWNLOAD_MIN_KBITS",
-                "sqm-autorate.@network[0].download_min_kbits",
-                None,
-            )?,
+            download_min_percent: 0.0, // placeholder, computed below
+            download_min_kbits: 0.0,   // placeholder, computed below
             upload_base_kbits: Self::get::<f64>(
                 "SQMA_UPLOAD_BASE_KBITS",
                 "sqm-autorate.@network[0].upload_base_kbits",
@@ -113,11 +112,8 @@ impl Config {
                 "sqm-autorate.@network[0].upload_interface",
                 None,
             )?,
-            upload_min_kbits: Self::get::<f64>(
-                "SQMA_UPLOAD_MIN_KBITS",
-                "sqm-autorate.@network[0].upload_min_kbits",
-                None,
-            )?,
+            upload_min_percent: 0.0, // placeholder, computed below
+            upload_min_kbits: 0.0,   // placeholder, computed below
             // Output section
             log_level: Self::get::<Level>(
                 "SQMA_LOG_LEVEL",
@@ -190,7 +186,30 @@ impl Config {
                 "sqm-autorate.@advanced_settings[0].upload_delay_ms",
                 Some(15.0),
             )?,
-        })
+        };
+
+        let mut config = config;
+
+        config.download_min_percent = Self::get::<f64>(
+            "SQMA_DOWNLOAD_MIN_PERCENT",
+            "sqm-autorate.@network[0].download_min_percent",
+            Some(20.0),
+        )?
+        .clamp(1.0, 80.0);
+
+        config.upload_min_percent = Self::get::<f64>(
+            "SQMA_UPLOAD_MIN_PERCENT",
+            "sqm-autorate.@network[0].upload_min_percent",
+            Some(20.0),
+        )?
+        .clamp(1.0, 80.0);
+
+        config.download_min_kbits =
+            (config.download_base_kbits * config.download_min_percent / 100.0).floor();
+        config.upload_min_kbits =
+            (config.upload_base_kbits * config.upload_min_percent / 100.0).floor();
+
+        Ok(config)
     }
 
     fn get<T: FromStr>(env_key: &str, uci_key: &str, default: Option<T>) -> Result<T, ConfigError> {
