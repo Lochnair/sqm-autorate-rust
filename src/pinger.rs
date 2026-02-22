@@ -91,11 +91,12 @@ pub trait PingSender {
         id: u16,
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
+        tick_interval: f64,
     ) -> anyhow::Result<()> {
         let mut socket = open_socket(type_)?;
 
         let mut seq: u16 = 0;
-        let tick_duration_ms: u16 = 500;
+        let tick_duration_ms: u16 = (tick_interval * 1000.0) as u16;
 
         loop {
             let reflectors_unlocked = reflectors_lock.read().unwrap();

@@ -139,7 +139,7 @@ fn main() -> anyhow::Result<()> {
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
     let sender_handle = thread::Builder::new().name("sender".to_string()).spawn(
         move || -> anyhow::Result<()> {
-            pinger_sender.send(id, config.measurement_type, reflector_peers_lock_clone)
+            pinger_sender.send(id, config.measurement_type, reflector_peers_lock_clone, config.tick_interval)
         },
     )?;
 
