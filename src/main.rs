@@ -14,6 +14,7 @@ mod util;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
 use ::log::{debug, info};
+use mlua::Lua;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -36,6 +37,18 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> anyhow::Result<()> {
     println!("Starting sqm-autorate version {}", VERSION);
+
+    let lua = Lua::new();
+
+    let map_table = lua.create_table().unwrap();
+    map_table.set(1, "one").unwrap();
+    map_table.set("two", 2).unwrap();
+
+    lua.globals().set("map_table", map_table).unwrap();
+
+    lua.load("for k,v in pairs(map_table) do print(k,v) end")
+        .exec()
+        .unwrap();
 
     let config = Config::new()?;
     log::init(config.log_level)?;
