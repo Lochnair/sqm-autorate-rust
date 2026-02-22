@@ -44,8 +44,8 @@ impl Baseliner {
         loop {
             let time_data = self.stats_receiver.recv()?;
 
-            let mut owd_baseline_map = self.owd_baseline.lock().unwrap();
-            let mut owd_recent_map = self.owd_recent.lock().unwrap();
+            let mut owd_baseline_map = self.owd_baseline.lock_anyhow()?;
+            let mut owd_recent_map = self.owd_recent.lock_anyhow()?;
 
             let owd_baseline_new = ReflectorStats {
                 down_ewma: time_data.down_time,

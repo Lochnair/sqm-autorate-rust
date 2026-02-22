@@ -196,9 +196,9 @@ impl Ratecontroller {
         state_ul.deltas.clear();
 
         let now_t = Instant::now();
-        let owd_baseline = self.owd_baseline.lock().unwrap();
-        let owd_recent = self.owd_recent.lock().unwrap();
-        let reflectors = self.reflectors_lock.read().unwrap();
+        let owd_baseline = self.owd_baseline.lock_anyhow()?;
+        let owd_recent = self.owd_recent.lock_anyhow()?;
+        let reflectors = self.reflectors_lock.read_anyhow()?;
 
         for reflector in reflectors.iter() {
             // only consider this data if it's less than 2 * tick_duration seconds old

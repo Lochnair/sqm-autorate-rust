@@ -64,7 +64,7 @@ pub trait PingListener {
 
             let addr: IpAddr = sender.as_socket().unwrap().ip();
 
-            let reflectors = reflectors_lock.read().unwrap();
+            let reflectors = reflectors_lock.read_anyhow()?;
             if !reflectors.contains(&addr) {
                 continue;
             }
@@ -100,9 +100,17 @@ pub trait PingSender {
         let tick_duration_ms: u16 = (tick_interval * 1000.0) as u16;
 
         loop {
-            let reflectors_unlocked = reflectors_lock.read().unwrap();
+            // Clone the reflectors vec and drop the read lock immediately —
+            // holding it for the entire tick would starve the reflector selector's write lock.
+            let reflectors_unlocked = reflectors_lock.read_anyhow()?;
             let reflectors = reflectors_unlocked.clone();
             drop(reflectors_unlocked);
+
+            if reflectors.is_empty() {
+                thread::sleep(Duration::from_millis(tick_duration_ms as u64));
+                continue;
+            }
+
             let sleep_duration =
                 Duration::from_millis((tick_duration_ms / reflectors.len() as u16) as u64);
 

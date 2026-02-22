@@ -45,7 +45,7 @@ impl ReflectorSelector {
             }
 
             let mut next_peers: Vec<IpAddr> = Vec::new();
-            let mut reflectors_peers = self.reflector_peers_lock.write().unwrap();
+            let mut reflectors_peers = self.reflector_peers_lock.write_anyhow()?;
 
             // Include all current peers
             for reflector in reflectors_peers.iter() {
@@ -62,7 +62,8 @@ impl ReflectorSelector {
                 next_peers.push(*next_candidate);
             }
 
-            // Put all the pool members back into the peers for some re-baselining...
+            // Clone next_peers because we need it again after the baseline sleep
+            // to iterate over candidates for RTT measurement.
             *reflectors_peers = next_peers.clone();
 
             // Drop the MutexGuard explicitly, as Rust won't unlock the mutex by default
@@ -74,10 +75,10 @@ impl ReflectorSelector {
             sleep(baseline_sleep_time);
 
             // Re-acquire the lock when we wake up again
-            reflectors_peers = self.reflector_peers_lock.write().unwrap();
+            reflectors_peers = self.reflector_peers_lock.write_anyhow()?;
 
             let mut candidates = Vec::new();
-            let owd_recent = self.owd_recent.lock().unwrap();
+            let owd_recent = self.owd_recent.lock_anyhow()?;
 
             for peer in next_peers {
                 if owd_recent.contains_key(&peer) {
