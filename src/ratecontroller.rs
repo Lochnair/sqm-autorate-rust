@@ -188,7 +188,7 @@ impl Ratecontroller {
         Ok(())
     }
 
-    fn update_deltas(&mut self) {
+    fn update_deltas(&mut self) -> anyhow::Result<()> {
         let state_dl = &mut self.state_dl;
         let state_ul = &mut self.state_ul;
 
@@ -226,14 +226,16 @@ impl Ratecontroller {
         }
 
         // sort owd's lowest to highest
-        state_dl.deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        state_ul.deltas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        state_dl.deltas.sort_by(|a, b| a.total_cmp(b));
+        state_ul.deltas.sort_by(|a, b| a.total_cmp(b));
 
         if state_dl.deltas.len() < 5 || state_ul.deltas.len() < 5 {
             // trigger reselection
             warn!("Not enough delta values, triggering reselection");
             let _ = self.reselect_trigger.send(true);
         }
+
+        Ok(())
     }
 
     pub fn new(
@@ -295,6 +297,7 @@ impl Ratecontroller {
             speed_hist_fd_inner = File::options()
                 .create(true)
                 .write(true)
+                .truncate(true)
                 .open(self.config.speed_hist_file.as_str())?;
 
             speed_hist_fd_inner.write_all("time,counter,upspeed,downspeed\n".as_bytes())?;
@@ -305,6 +308,7 @@ impl Ratecontroller {
             stats_fd_inner = File::options()
                 .create(true)
                 .write(true)
+                .truncate(true)
                 .open(self.config.stats_file.as_str())?;
 
             stats_fd_inner.write_all(
@@ -332,7 +336,7 @@ impl Ratecontroller {
                     continue;
                 }
 
-                self.update_deltas();
+                self.update_deltas()?;
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
                     warn!("No reflector data available, dropping to minimum rates");
@@ -390,7 +394,7 @@ impl Ratecontroller {
                 );
 
                 if let Some(ref mut fd) = stats_fd {
-                    if let Err(e) = fd.write(
+                    if let Err(e) = fd.write_all(
                         format!(
                             "{},{},{},{},{},{},{},{}\n",
                             stats_time.secs(),
