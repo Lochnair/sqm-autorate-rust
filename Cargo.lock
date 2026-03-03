@@ -217,9 +217,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
-name = "icmp-socket"
-version = "0.4.0"
-source = "git+https://github.com/Lochnair/icmp-socket.git?tag=v0.4.0#ca3695e3e104713fda9872546545dc5266f6ed4c"
+name = "icmp-socket2"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4a72abd00afc496b7dc6a0cb275c19c669da9d0c2ee5d4c2570a8a67b83b53f"
 dependencies = [
  "socket2",
 ]
@@ -581,7 +582,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "fastrand",
- "icmp-socket",
+ "icmp-socket2",
  "libc",
  "log",
  "mlua",
