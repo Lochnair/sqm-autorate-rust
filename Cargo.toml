@@ -26,13 +26,20 @@ netlink-socket2 = "0.2"
 fastrand = "2"
 rustix = { version = "1.1", features = ["fs", "thread", "time"] }
 rust-uci = { version = "0.1", optional = true }
+serde = { version = "1", default-features = false, features = ["derive"] }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 thiserror = "2.0"
 libc = "0.2"
-mlua = { version = "0.11.6", features = ["lua51", "vendored"] }
+mlua = { version = "0.11.6", optional = true, features = ["lua51", "vendored", "send"] }
 
 [dependencies.log]
 features = ["std"]
 version = "0.4"
 
 [features]
+default = []
 uci = ["dep:rust-uci"]
+lua = ["dep:mlua"]
+# ebpf feature: requires Linux 5.4+ with CONFIG_DEBUG_INFO_BTF=y
+# Will depend on net-vitals when implemented (Cat 4)
+ebpf = []
