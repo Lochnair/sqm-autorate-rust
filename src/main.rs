@@ -1,6 +1,7 @@
 extern crate core;
 
 mod baseliner;
+mod component;
 mod config;
 mod log;
 mod netlink;
@@ -12,242 +13,317 @@ mod reflector_selector;
 mod time;
 mod util;
 
-use crate::baseliner::{Baseliner, ReflectorStats};
-use ::log::{debug, info};
-use mlua::Lua;
-use std::collections::HashMap;
+use ::log::info;
+use component::baseliner_ewma::SqmEwmaBaseliner;
+use component::algorithm_sqm_ewma::SqmEwmaAlgorithm;
+use component::algorithm_cake_autorate::CakeAutorateAlgorithm;
+use component::algorithm_tievolu::TievolAlgorithm;
+use component::{Baseliner, RateAlgorithm};
+use config::{AlgorithmType, AppConfig};
+use netlink::Netlink;
+use pinger::{PingListener, PingSender};
+use pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
+use pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
+use ratecontroller::StatsDirection;
+use reflector_selector::ReflectorSelector;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
-use std::time::Instant;
-use std::{process, thread};
-
-use crate::config::{Config, MeasurementType};
-use crate::netlink::Netlink;
-use crate::pinger::{PingListener, PingSender};
-use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
-use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
-use crate::ratecontroller::{Ratecontroller, StatsDirection};
-use crate::reflector_selector::ReflectorSelector;
+use std::{env, process, thread};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn main() -> anyhow::Result<()> {
-    println!("Starting sqm-autorate version {}", VERSION);
+// Default reflectors used when no pool file is large enough
+const DEFAULT_REFLECTORS: &[&str] = &[
+    "9.9.9.9",
+    "8.238.120.14",
+    "74.82.42.42",
+    "194.242.2.2",
+    "208.67.222.222",
+    "94.140.14.14",
+];
 
-    let lua = Lua::new();
+fn usage() -> ! {
+    eprintln!("Usage: sqm-autorate-rust <config.toml>");
+    #[cfg(feature = "uci")]
+    eprintln!("       sqm-autorate-rust --uci");
+    process::exit(1);
+}
 
-    let map_table = lua.create_table().unwrap();
-    map_table.set(1, "one").unwrap();
-    map_table.set("two", 2).unwrap();
-
-    lua.globals().set("map_table", map_table).unwrap();
-
-    lua.load("for k,v in pairs(map_table) do print(k,v) end")
-        .exec()
-        .unwrap();
-
-    let config = Config::new()?;
-    log::init(config.log_level)?;
-    let mut reflectors = config.load_reflectors()?;
-    let start_t = Instant::now();
-
-    // The identifier field in ICMP is only 2 bytes
-    // so take the last 2 bytes of the PID as the ID
-    let id = (process::id() & 0xFFFF) as u16;
-
-    // Create data structures shared by different threads
-    let owd_baseline = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-    let owd_recent = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-    let reflector_peers_lock = Arc::new(RwLock::new(Vec::<IpAddr>::new()));
-    let mut reflector_pool = Vec::<IpAddr>::new();
-    let reflector_pool_size = reflectors.len();
-
-    let default_reflectors = [
-        IpAddr::from_str("9.9.9.9")?,
-        IpAddr::from_str("8.238.120.14")?,
-        IpAddr::from_str("74.82.42.42")?,
-        IpAddr::from_str("194.242.2.2")?,
-        IpAddr::from_str("208.67.222.222")?,
-        IpAddr::from_str("94.140.14.14")?,
-    ];
-
-    match reflector_pool_size > config.num_reflectors as usize {
-        true => {
-            let mut peers = reflector_peers_lock.write().unwrap();
-            peers.extend_from_slice(&default_reflectors);
-            reflector_pool.append(reflectors.as_mut());
+fn load_app_config() -> anyhow::Result<AppConfig> {
+    let mut args = env::args().skip(1);
+    match args.next().as_deref() {
+        Some("--uci") => {
+            #[cfg(feature = "uci")]
+            return config::load_config_uci();
+            #[cfg(not(feature = "uci"))]
+            {
+                eprintln!("--uci requires the 'uci' feature flag");
+                process::exit(1);
+            }
         }
-        false => {
-            let mut peers = reflector_peers_lock.write().unwrap();
-            peers.extend_from_slice(&default_reflectors);
+        Some(path) => config::load_config(path),
+        None => {
+            // Try a few conventional locations before giving up
+            for candidate in &[
+                "/etc/sqm-autorate/sqm-autorate.toml",
+                "/etc/sqm-autorate.toml",
+                "sqm-autorate.toml",
+            ] {
+                if std::path::Path::new(candidate).exists() {
+                    return config::load_config(candidate);
+                }
+            }
+            eprintln!("No config file found. Pass a path as the first argument.");
+            usage();
         }
     }
+}
 
-    let (baseliner_stats_sender, baseliner_stats_receiver) = channel();
-    let (reselect_sender, reselect_receiver) = channel();
+fn build_algorithm(cfg: &AppConfig) -> anyhow::Result<Box<dyn RateAlgorithm>> {
+    let net = &cfg.network;
+    let min_dl = net.download_min_kbits();
+    let min_ul = net.upload_min_kbits();
 
-    let (mut pinger_receiver, mut pinger_sender) = match config.measurement_type {
-        MeasurementType::Icmp => (
-            Box::new(PingerICMPEchoListener {}) as Box<dyn PingListener + Send>,
-            Box::new(PingerICMPEchoSender {}) as Box<dyn PingSender + Send>,
+    match cfg.algorithm.algorithm_type {
+        AlgorithmType::SqmEwma => Ok(Box::new(SqmEwmaAlgorithm::new(
+            cfg.algorithm.sqm_ewma.clone(),
+            net.download_base_kbits,
+            net.upload_base_kbits,
+            min_dl,
+            min_ul,
+        ))),
+
+        AlgorithmType::CakeAutorate => Ok(Box::new(CakeAutorateAlgorithm::new(
+            cfg.algorithm.cake_autorate.clone(),
+            net.download_base_kbits,
+            net.upload_base_kbits,
+            min_dl,
+            min_ul,
+        ))),
+
+        AlgorithmType::Tievolu => Ok(Box::new(TievolAlgorithm::new(
+            cfg.algorithm.tievolu.clone(),
+            net.download_base_kbits,
+            net.upload_base_kbits,
+            min_dl,
+            min_ul,
+        ))),
+
+        AlgorithmType::Lua => {
+            #[cfg(feature = "lua")]
+            {
+                let lua_cfg = cfg.algorithm.lua.as_ref().unwrap();
+                Ok(Box::new(
+                    component::algorithm_lua::LuaAlgorithm::new(
+                        lua_cfg,
+                        net.download_base_kbits,
+                        net.upload_base_kbits,
+                    )?,
+                ))
+            }
+            #[cfg(not(feature = "lua"))]
+            anyhow::bail!(
+                "Algorithm type 'lua' requires the 'lua' feature — rebuild with --features lua"
+            )
+        }
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    println!("Starting sqm-autorate version {VERSION}");
+
+    let cfg = load_app_config()?;
+    log::init(cfg.output.log_level)?;
+
+    info!("sqm-autorate {VERSION} starting");
+    info!("Algorithm: {:?}", cfg.algorithm.algorithm_type);
+
+    let id = (process::id() & 0xFFFF) as u16;
+
+    // ── Build reflector lists ─────────────────────────────────────────────────
+    let all_reflectors = config::load_reflectors(&cfg.ping_source.reflector_list)?;
+    let pool_size = all_reflectors.len();
+    let num_reflectors = cfg.ping_source.num_reflectors as usize;
+
+    let default_peers: Vec<IpAddr> = DEFAULT_REFLECTORS
+        .iter()
+        .map(|s| IpAddr::from_str(s).unwrap())
+        .collect();
+
+    let reflector_peers_lock = Arc::new(RwLock::new(default_peers));
+    let reflector_pool: Vec<IpAddr>;
+
+    let use_dynamic_selector = pool_size > num_reflectors;
+    if use_dynamic_selector {
+        reflector_pool = all_reflectors;
+    } else {
+        reflector_pool = Vec::new();
+    }
+
+    // ── Build shared baseliner ────────────────────────────────────────────────
+    let baseliner: Arc<RwLock<dyn Baseliner>> = Arc::new(RwLock::new(
+        SqmEwmaBaseliner::new(cfg.ping_source.tick_interval),
+    ));
+
+    // ── Channels ──────────────────────────────────────────────────────────────
+    let (ping_tx, ping_rx) = channel();
+    let (reselect_tx, reselect_rx) = channel::<bool>();
+
+    // ── Pinger implementation ─────────────────────────────────────────────────
+    let (mut pinger_receiver, mut pinger_sender): (
+        Box<dyn PingListener + Send>,
+        Box<dyn PingSender + Send>,
+    ) = match cfg.ping_source.measurement_type {
+        config::MeasurementType::Icmp => (
+            Box::new(PingerICMPEchoListener {}),
+            Box::new(PingerICMPEchoSender {}),
         ),
-        MeasurementType::IcmpTimestamps => (
-            Box::new(PingerICMPTimestampListener {}) as Box<dyn PingListener + Send>,
-            Box::new(PingerICMPTimestampSender {}) as Box<dyn PingSender + Send>,
+        config::MeasurementType::IcmpTimestamps => (
+            Box::new(PingerICMPTimestampListener {}),
+            Box::new(PingerICMPTimestampSender {}),
         ),
-        MeasurementType::Ntp | MeasurementType::TcpTimestamps => {
-            todo!()
+        config::MeasurementType::Ntp | config::MeasurementType::TcpTimestamps => {
+            todo!("NTP and TCP timestamp pingers are not yet implemented")
         }
     };
 
-    let baseliner = Baseliner {
-        config: config.clone(),
-        owd_baseline: owd_baseline.clone(),
-        owd_recent: owd_recent.clone(),
-        reselect_trigger: reselect_sender.clone(),
-        start_time: start_t,
-        stats_receiver: baseliner_stats_receiver,
-    };
+    // ── Initialise qdisc to minimum rates ────────────────────────────────────
+    let down_qdisc = Netlink::qdisc_from_ifname(cfg.network.download_interface.as_str())?;
+    let up_qdisc = Netlink::qdisc_from_ifname(cfg.network.upload_interface.as_str())?;
+    let min_dl = cfg.network.download_min_kbits();
+    let min_ul = cfg.network.upload_min_kbits();
 
-    let down_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
-    let up_qdisc = Netlink::qdisc_from_ifname(config.upload_interface.as_str())?;
+    info!("Setting shaper to minimum rates: DL={min_dl} UL={min_ul} kbit/s");
+    Netlink::set_qdisc_rate(down_qdisc, min_dl as u64)?;
+    Netlink::set_qdisc_rate(up_qdisc, min_ul as u64)?;
 
-    /* Set initial TC values to minimum
-     * so there should be no initial bufferbloat to
-     * fool the baseliner
-     */
-    info!(
-        "Setting shaper rates to minimum (D/L): {} / {}",
-        config.download_min_kbits, config.upload_min_kbits
-    );
-    Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64)?;
-    Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64)?;
+    // Brief settle to let the shaper drain any queued bloat
+    info!("Settling for 2 s…");
+    sleep(Duration::new(2, 0));
 
-    // Sleep for a few seconds to give the shaper a chance
-    // to control the queue if load is heavy
-    let settle_sleep_time = Duration::new(2, 0);
-    info!(
-        "Sleeping for {} to give the shaper a chance to get in control if there's bloat",
-        settle_sleep_time.as_secs_f64()
-    );
-    sleep(settle_sleep_time);
+    // ── Algorithm ─────────────────────────────────────────────────────────────
+    let mut algorithm = build_algorithm(&cfg)?;
 
+    // ── Error bus ─────────────────────────────────────────────────────────────
     let (error_tx, error_rx) = channel::<anyhow::Error>();
 
-    let err_tx = error_tx.clone();
-    let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    thread::Builder::new().name("receiver".to_string()).spawn(
-        move || {
-            if let Err(e) = pinger_receiver.listen(
-                id,
-                config.measurement_type,
-                reflector_peers_lock_clone,
-                baseliner_stats_sender,
-            ) {
-                let _ = err_tx.send(e);
-            }
-        },
-    )?;
-
-    let err_tx = error_tx.clone();
-    thread::Builder::new()
-        .name("baseliner".to_string())
-        .spawn(move || {
-            if let Err(e) = baseliner.run() {
-                let _ = err_tx.send(e);
-            }
-        })?;
-
-    let err_tx = error_tx.clone();
-    let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    thread::Builder::new().name("sender".to_string()).spawn(
-        move || {
-            if let Err(e) = pinger_sender.send(
-                id,
-                config.measurement_type,
-                reflector_peers_lock_clone,
-                config.tick_interval,
-            ) {
-                let _ = err_tx.send(e);
-            }
-        },
-    )?;
-
-    if reflector_pool_size > config.num_reflectors as usize {
-        let reflector_selector = ReflectorSelector {
-            config: config.clone(),
-            owd_recent: owd_recent.clone(),
-            reflector_peers_lock: reflector_peers_lock.clone(),
-            reflector_pool,
-            trigger_channel: reselect_receiver,
-        };
+    // Thread: pinger receiver
+    {
         let err_tx = error_tx.clone();
+        let peers = reflector_peers_lock.clone();
+        let mtype = cfg.ping_source.measurement_type;
         thread::Builder::new()
-            .name("reselection".to_string())
+            .name("receiver".into())
             .spawn(move || {
-                if let Err(e) = reflector_selector.run() {
+                if let Err(e) = pinger_receiver.listen(id, mtype, peers, ping_tx) {
                     let _ = err_tx.send(e);
                 }
             })?;
     }
 
-    // Sleep 10 seconds before we start adjusting speeds
+    // Thread: baseliner
+    {
+        let err_tx = error_tx.clone();
+        let b = baseliner.clone();
+        let rs = reselect_tx.clone();
+        thread::Builder::new()
+            .name("baseliner".into())
+            .spawn(move || {
+                if let Err(e) = baseliner::run(b, ping_rx, rs) {
+                    let _ = err_tx.send(e);
+                }
+            })?;
+    }
+
+    // Thread: pinger sender
+    {
+        let err_tx = error_tx.clone();
+        let peers = reflector_peers_lock.clone();
+        let tick = cfg.ping_source.tick_interval;
+        let mtype = cfg.ping_source.measurement_type;
+        thread::Builder::new()
+            .name("sender".into())
+            .spawn(move || {
+                if let Err(e) = pinger_sender.send(id, mtype, peers, tick) {
+                    let _ = err_tx.send(e);
+                }
+            })?;
+    }
+
+    // Thread: reflector selector (only when pool is larger than active count)
+    if use_dynamic_selector {
+        let selector = ReflectorSelector {
+            config: cfg.ping_source.clone(),
+            baseliner: baseliner.clone(),
+            reflector_peers_lock: reflector_peers_lock.clone(),
+            reflector_pool,
+            trigger_channel: reselect_rx,
+        };
+        let err_tx = error_tx.clone();
+        thread::Builder::new()
+            .name("reselection".into())
+            .spawn(move || {
+                if let Err(e) = selector.run() {
+                    let _ = err_tx.send(e);
+                }
+            })?;
+    }
+
+    // Wait 10 s before we start touching rates (let baselines stabilise)
+    info!("Waiting 10 s before enabling rate control…");
     sleep(Duration::new(10, 0));
 
-    let dl_direction = if config.download_interface.starts_with("ifb")
-        || config.download_interface.starts_with("veth")
+    // ── Determine interface stats direction ───────────────────────────────────
+    let dl_dir = if cfg.network.download_interface.starts_with("ifb")
+        || cfg.network.download_interface.starts_with("veth")
     {
         StatsDirection::TX
     } else {
         StatsDirection::RX
     };
-    let ul_direction = if config.upload_interface.starts_with("ifb")
-        || config.upload_interface.starts_with("veth")
+    let ul_dir = if cfg.network.upload_interface.starts_with("ifb")
+        || cfg.network.upload_interface.starts_with("veth")
     {
         StatsDirection::RX
     } else {
         StatsDirection::TX
     };
 
-    let mut ratecontroller = Ratecontroller::new(
-        config.clone(),
-        owd_baseline,
-        owd_recent,
-        reflector_peers_lock,
-        reselect_sender,
-        dl_direction,
-        ul_direction,
-    )?;
+    // Thread: rate controller
+    {
+        let err_tx = error_tx.clone();
+        let b = baseliner.clone();
+        let net = cfg.network.clone();
+        let out = cfg.output.clone();
+        let rs = reselect_tx.clone();
+        thread::Builder::new()
+            .name("ratecontroller".into())
+            .spawn(move || {
+                if let Err(e) = ratecontroller::run(
+                    algorithm.as_mut(),
+                    b,
+                    &net,
+                    rs,
+                    down_qdisc,
+                    up_qdisc,
+                    dl_dir,
+                    ul_dir,
+                    &out,
+                ) {
+                    let _ = err_tx.send(e);
+                }
+            })?;
+    }
 
-    debug!(
-        "Download direction: {}:{:?}",
-        config.download_interface, dl_direction
-    );
-
-    debug!(
-        "Upload direction: {}:{:?}",
-        config.upload_interface, ul_direction
-    );
-
-    let err_tx = error_tx.clone();
-    thread::Builder::new()
-        .name("ratecontroller".to_string())
-        .spawn(move || {
-            if let Err(e) = ratecontroller.run() {
-                let _ = err_tx.send(e);
-            }
-        })?;
-
-    // Drop original sender so recv() unblocks if all threads exit cleanly
+    // Drop original sender so recv() unblocks when all threads exit cleanly
     drop(error_tx);
 
-    // Wait for first error
     match error_rx.recv() {
         Ok(e) => Err(anyhow::anyhow!("thread exited with error: {e}")),
-        Err(_) => Ok(()), // all senders dropped = all threads exited without error
+        Err(_) => Ok(()), // all senders dropped = all threads exited cleanly
     }
 }
