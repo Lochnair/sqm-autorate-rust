@@ -3,9 +3,9 @@ use std::time::Instant;
 
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;
-use icmp_socket::Icmpv4Message;
-use icmp_socket::Icmpv4Packet;
-use icmp_socket::packet::WithEchoRequest;
+use icmp_socket2::Icmpv4Message;
+use icmp_socket2::Icmpv4Packet;
+use icmp_socket2::packet::WithEchoRequest;
 use rustix::thread::ClockId;
 
 pub struct PingerICMPEchoListener {}

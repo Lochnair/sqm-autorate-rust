@@ -1,6 +1,6 @@
-use crate::MeasurementType;
-use icmp_socket::socket::IcmpSocket;
-use icmp_socket::{IcmpSocket4, Icmpv4Packet};
+use crate::config::MeasurementType;
+use icmp_socket2::socket::IcmpSocket;
+use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
 use crate::util::RwLockExt;
 use log::{debug, warn};
 use std::net::{IpAddr, Ipv4Addr};
@@ -135,5 +135,5 @@ pub trait PingSender {
         }
     }
 
-    fn craft_packet(&self, id: u16, seq: u16) -> icmp_socket::packet::Icmpv4Packet;
+    fn craft_packet(&self, id: u16, seq: u16) -> icmp_socket2::packet::Icmpv4Packet;
 }
