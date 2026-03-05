@@ -6,6 +6,9 @@ pub mod baseliner_ewma;
 #[cfg(feature = "lua")]
 pub mod algorithm_lua;
 
+#[cfg(feature = "ebpf")]
+pub mod tcp_monitor;
+
 use crate::pinger::PingReply;
 use std::net::IpAddr;
 use std::time::Instant;
