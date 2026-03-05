@@ -31,6 +31,10 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 thiserror = "2.0"
 libc = "0.2"
 mlua = { version = "0.11.6", optional = true, features = ["lua51", "vendored", "send"] }
+# net-vitals provides eBPF-based TCP RTT measurement (Phase C/D).
+# Requires Linux 5.4+ with CONFIG_DEBUG_INFO_BTF=y and the eBPF Rust toolchain
+# (nightly + bpf-linker + bpfel-unknown-none target).
+net-vitals = { path = "../net-vitals/net-vitals", optional = true }
 
 [dependencies.log]
 features = ["std"]
@@ -40,6 +44,5 @@ version = "0.4"
 default = []
 uci = ["dep:rust-uci"]
 lua = ["dep:mlua"]
-# ebpf feature: requires Linux 5.4+ with CONFIG_DEBUG_INFO_BTF=y
-# Will depend on net-vitals when implemented (Cat 4)
-ebpf = []
+# ebpf: TCP RTT measurement via eBPF TC classifier (Linux 5.4+ required)
+ebpf = ["dep:net-vitals"]
