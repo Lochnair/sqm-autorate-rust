@@ -30,6 +30,8 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, RwLock};
+#[cfg(feature = "ebpf")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 use std::{env, process, thread};
@@ -211,6 +213,34 @@ fn main() -> anyhow::Result<()> {
     // ── Error bus ─────────────────────────────────────────────────────────────
     let (error_tx, error_rx) = channel::<anyhow::Error>();
 
+    // ── eBPF TCP monitor + dynamic reflector channel (Phase C/D) ─────────────
+    #[cfg(feature = "ebpf")]
+    let discovery_rx_opt: Option<std::sync::mpsc::Receiver<std::net::IpAddr>> = {
+        if let Some(tcp_cfg) = &cfg.tcp_monitor {
+            let iface = tcp_cfg.wan_interface.clone();
+            let b = baseliner.clone();
+            let err_tx = error_tx.clone();
+            let tcp_running = Arc::new(AtomicBool::new(true));
+            let _tcp_running = tcp_running.clone();
+
+            // Bounded channel: tcp_monitor sends discovered IPs, selector drains them.
+            let (disc_tx, disc_rx) = std::sync::mpsc::sync_channel::<std::net::IpAddr>(256);
+            let discovery_tx = if tcp_cfg.dynamic_reflectors { Some(disc_tx) } else { None };
+
+            thread::Builder::new()
+                .name("tcp-monitor".into())
+                .spawn(move || {
+                    if let Err(e) = component::tcp_monitor::run(&iface, b, tcp_running, discovery_tx) {
+                        let _ = err_tx.send(e);
+                    }
+                })?;
+
+            if tcp_cfg.dynamic_reflectors { Some(disc_rx) } else { None }
+        } else {
+            None
+        }
+    };
+
     // Thread: pinger receiver
     {
         let err_tx = error_tx.clone();
@@ -262,6 +292,8 @@ fn main() -> anyhow::Result<()> {
             reflector_peers_lock: reflector_peers_lock.clone(),
             reflector_pool,
             trigger_channel: reselect_rx,
+            #[cfg(feature = "ebpf")]
+            dynamic_candidates: discovery_rx_opt,
         };
         let err_tx = error_tx.clone();
         thread::Builder::new()

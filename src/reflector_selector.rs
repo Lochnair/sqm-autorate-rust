@@ -11,8 +11,14 @@ pub struct ReflectorSelector {
     pub config: PingSourceConfig,
     pub baseliner: Arc<RwLock<dyn Baseliner>>,
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
+    /// Static pool of candidate reflectors (from config file).
     pub reflector_pool: Vec<IpAddr>,
     pub trigger_channel: Receiver<bool>,
+    /// Dynamic candidates discovered via eBPF TCP flow monitoring (Phase D).
+    /// When `Some`, new IPs are drained each reselection cycle and merged with
+    /// the static pool before scoring.
+    #[cfg(feature = "ebpf")]
+    pub dynamic_candidates: Option<Receiver<IpAddr>>,
 }
 
 impl ReflectorSelector {
@@ -53,13 +59,33 @@ impl ReflectorSelector {
                 next_peers.push(ip);
             }
 
-            // Add 20 random candidates from the pool
-            for _ in 0..20 {
-                let candidate =
-                    self.reflector_pool[fastrand::usize(..self.reflector_pool.len())];
-                if !next_peers.contains(&candidate) {
-                    debug!("Candidate: {candidate}");
-                    next_peers.push(candidate);
+            // Drain any eBPF-discovered dynamic candidates (Phase D).
+            #[cfg(feature = "ebpf")]
+            if let Some(ref dyn_rx) = self.dynamic_candidates {
+                let max_dynamic = 10; // cap to avoid overwhelming the scorer
+                let mut added = 0;
+                while added < max_dynamic {
+                    match dyn_rx.try_recv() {
+                        Ok(ip) if !next_peers.contains(&ip) => {
+                            debug!("Dynamic candidate (eBPF): {ip}");
+                            next_peers.push(ip);
+                            added += 1;
+                        }
+                        Ok(_) => {} // already in list
+                        Err(_) => break,
+                    }
+                }
+            }
+
+            // Add random candidates from the static pool (if non-empty).
+            if !self.reflector_pool.is_empty() {
+                for _ in 0..20 {
+                    let candidate =
+                        self.reflector_pool[fastrand::usize(..self.reflector_pool.len())];
+                    if !next_peers.contains(&candidate) {
+                        debug!("Candidate: {candidate}");
+                        next_peers.push(candidate);
+                    }
                 }
             }
 
