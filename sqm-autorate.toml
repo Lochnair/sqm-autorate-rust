@@ -1,0 +1,103 @@
+# sqm-autorate configuration
+# Pass this file as the first argument: sqm-autorate-rust /path/to/sqm-autorate.toml
+
+# ── Network ──────────────────────────────────────────────────────────────────
+[network]
+# WAN-facing interfaces managed by CAKE
+download_interface = "eth0"
+upload_interface   = "eth0"
+
+# ISP-rated maximum speeds (kbit/s)
+download_base_kbits = 100000
+upload_base_kbits   = 20000
+
+# Minimum shaper floor as % of base (clamped to 1–80 %)
+download_min_percent = 20.0
+upload_min_percent   = 20.0
+
+# ── Ping source ───────────────────────────────────────────────────────────────
+[ping_source]
+# Measurement method: icmp | icmp-timestamps (default)
+type = "icmp-timestamps"
+
+# Path to the CSV file containing reflector IPs (one per line, first column)
+reflector_list = "/etc/sqm-autorate/reflectors-icmp.csv"
+
+# Number of active reflectors to ping simultaneously
+num_reflectors = 5
+
+# Seconds between successive pings to each reflector
+tick_interval = 0.5
+
+# Minutes between forced reflector reselection cycles (after 40 reselections)
+peer_reselection_time = 15
+
+# ── Algorithm ─────────────────────────────────────────────────────────────────
+[algorithm]
+# Choices: sqm-ewma (default) | cake-autorate | tievolu | lua
+type = "sqm-ewma"
+
+# sqm-ewma parameters (used when type = "sqm-ewma")
+[algorithm.sqm_ewma]
+download_delay_ms      = 15.0   # OWD delta that triggers a rate decrease (ms)
+upload_delay_ms        = 15.0
+high_load_level        = 0.8    # Fraction of current rate considered "high load"
+min_change_interval    = 0.5    # Control-loop period (s)
+speed_hist_size        = 100    # Number of previously-safe rates to remember
+
+# cake-autorate parameters (used when type = "cake-autorate")
+[algorithm.cake_autorate]
+dl_delay_thr_ms            = 30.0   # OWD delta to classify a sample as delayed (ms)
+ul_delay_thr_ms            = 30.0
+max_adjust_up_thr_ms       = 10.0   # Avg delta below which max increase is allowed (ms)
+max_adjust_down_thr_ms     = 60.0   # Avg delta at which max 25% decrease is applied (ms)
+detection_window           = 6      # Bufferbloat circular-window size (samples)
+detection_threshold        = 3      # Delayed samples in window to declare bufferbloat
+high_load_thr              = 0.75   # Fraction of current rate considered "high load"
+connection_active_thr_kbps = 2000.0 # Below this = idle
+bufferbloat_refractory_ms  = 300.0  # Min ms between consecutive decrease responses
+decay_refractory_ms        = 1000.0 # Min ms between consecutive decay steps
+alpha_baseline_increase    = 0.001  # EWMA α for slow baseline rise
+alpha_baseline_decrease    = 0.9    # EWMA α for fast baseline fall
+alpha_delta_ewma           = 0.095  # EWMA α for per-reflector delta smoothing
+min_change_interval        = 0.5
+
+# tievolu parameters (used when type = "tievolu")
+[algorithm.tievolu]
+# dl_max_loaded_latency_ms / ul_max_loaded_latency_ms are required when using
+# tievolu. Set them to your ISP's typical one-way delay plus an acceptable headroom.
+dl_max_loaded_latency_ms       = 20.0
+ul_max_loaded_latency_ms       = 20.0
+# dl_bw_standard_kbits / ul_bw_standard_kbits: target "resting" rate.
+# Defaults to download_base_kbits / upload_base_kbits if omitted.
+# dl_bw_standard_kbits = 80000
+# ul_bw_standard_kbits = 15000
+increase_min_pc                = 1.0
+increase_max_pc                = 25.0
+increase_factor                = 1.0
+increase_load_thr              = 0.70
+increase_delay_after_decrease_s = 600.0  # 10 min cooldown after a decrease
+increase_delay_after_increase_s = 0.0
+decrease_min_pc                = 10.0
+decrease_overshoot_pc          = 5.0
+decrease_delay_s               = 2.0
+relax_pc                       = 5.0
+relax_load_thr                 = 0.50
+relax_delay_s                  = 60.0
+max_recent_results             = 20
+bad_ping_pc                    = 25.0
+min_change_interval            = 0.5
+
+# Lua parameters (used when type = "lua")
+# [algorithm.lua]
+# script = "/etc/sqm-autorate/algorithm.lua"
+# All additional keys in this table are passed verbatim to M.init(config).
+# download_delay_ms = 15.0
+# upload_delay_ms   = 15.0
+
+# ── Output ─────────────────────────────────────────────────────────────────────
+[output]
+log_level           = "error"   # error | warn | info | debug | trace
+stats_file          = "/tmp/sqm-autorate.csv"
+speed_hist_file     = "/tmp/sqm-speedhist.csv"
+suppress_statistics = false
