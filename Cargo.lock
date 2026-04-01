@@ -271,6 +271,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e639b3a966932d8ab55cfc1e606e5421aef3d30a2610284535b854f11f6e4b44"
 
 [[package]]
+name = "netlink-bindings"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3707287f6171a6c70944b59089bfe0316613926df2e0d9ef28d108248709851"
+
+[[package]]
 name = "netlink-socket2"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -278,7 +284,7 @@ checksum = "ffef37f26cf649b9f473ccc00fa52d419511225a7b3a2093bf16dc8673ab9cf1"
 dependencies = [
  "libc",
  "maybe-async",
- "netlink-bindings",
+ "netlink-bindings 0.2.4",
 ]
 
 [[package]]
@@ -399,7 +405,7 @@ dependencies = [
  "icmp-socket2",
  "libc",
  "log",
- "netlink-bindings",
+ "netlink-bindings 0.3.0",
  "netlink-socket2",
  "rust-uci",
  "rustix",
