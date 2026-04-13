@@ -39,6 +39,9 @@ fn main() -> anyhow::Result<()> {
 
     let config = Config::new()?;
     log::init(config.log_level)?;
+    if config.dry_run {
+        info!("*** MONITORING MODE ACTIVE — qdisc rates will NOT be changed ***");
+    }
     let mut reflectors = config.load_reflectors()?;
     let start_t = Instant::now();
 
@@ -111,8 +114,8 @@ fn main() -> anyhow::Result<()> {
         "Setting shaper rates to minimum (D/L): {} / {}",
         config.download_min_kbits, config.upload_min_kbits
     );
-    Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64)?;
-    Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64)?;
+    Netlink::set_qdisc_rate(down_qdisc, config.download_min_kbits as u64, config.dry_run)?;
+    Netlink::set_qdisc_rate(up_qdisc, config.upload_min_kbits as u64, config.dry_run)?;
 
     // Sleep for a few seconds to give the shaper a chance
     // to control the queue if load is heavy

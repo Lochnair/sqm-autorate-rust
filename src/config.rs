@@ -84,6 +84,9 @@ pub struct Config {
     pub speed_hist_size: u32,
     pub tick_interval: f64,
     pub upload_delay_ms: f64,
+
+    // Monitoring / dry-run
+    pub dry_run: bool,
 }
 
 impl Config {
@@ -185,6 +188,11 @@ impl Config {
                 "SQMA_UPLOAD_DELAY_MS",
                 "sqm-autorate.@advanced_settings[0].upload_delay_ms",
                 Some(15.0),
+            )?,
+            dry_run: Self::get::<bool>(
+                "SQMA_DRY_RUN",
+                "sqm-autorate.@advanced_settings[0].dry_run",
+                Some(false),
             )?,
         };
 

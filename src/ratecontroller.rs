@@ -282,10 +282,12 @@ impl Ratecontroller {
         Netlink::set_qdisc_rate(
             self.state_dl.qdisc,
             self.state_dl.current_rate.round() as u64,
+            self.config.dry_run,
         )?;
         Netlink::set_qdisc_rate(
             self.state_ul.qdisc,
             self.state_ul.current_rate.round() as u64,
+            self.config.dry_run,
         )?;
 
         let mut speed_hist_fd: Option<File> = None;
@@ -346,10 +348,12 @@ impl Ratecontroller {
                     Netlink::set_qdisc_rate(
                         self.state_dl.qdisc,
                         self.state_dl.next_rate as u64,
+                        self.config.dry_run,
                     )?;
                     Netlink::set_qdisc_rate(
                         self.state_ul.qdisc,
                         self.state_ul.next_rate as u64,
+                        self.config.dry_run,
                     )?;
 
                     self.state_dl.current_rate = self.state_dl.next_rate;
@@ -370,11 +374,11 @@ impl Ratecontroller {
                 }
 
                 if self.state_dl.next_rate != self.state_dl.current_rate {
-                    Netlink::set_qdisc_rate(self.state_dl.qdisc, self.state_dl.next_rate as u64)?;
+                    Netlink::set_qdisc_rate(self.state_dl.qdisc, self.state_dl.next_rate as u64, self.config.dry_run)?;
                 }
 
                 if self.state_ul.next_rate != self.state_ul.current_rate {
-                    Netlink::set_qdisc_rate(self.state_ul.qdisc, self.state_ul.next_rate as u64)?;
+                    Netlink::set_qdisc_rate(self.state_ul.qdisc, self.state_ul.next_rate as u64, self.config.dry_run)?;
                 }
 
                 self.state_dl.current_rate = self.state_dl.next_rate;

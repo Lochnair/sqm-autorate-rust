@@ -1,6 +1,7 @@
 use std::io;
 use std::str::Utf8Error;
 
+use log::info;
 use netlink_bindings::{rt_link, tc};
 use netlink_socket2::NetlinkSocket;
 use thiserror::Error;
@@ -111,7 +112,15 @@ impl Netlink {
         Netlink::qdisc_from_ifindex(ifindex, ifname)
     }
 
-    pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64) -> Result<(), NetlinkError> {
+    pub fn set_qdisc_rate(qdisc: Qdisc, bandwidth_kbit: u64, dry_run: bool) -> Result<(), NetlinkError> {
+        if dry_run {
+            info!(
+                "dry-run: would set qdisc ifindex={} to {} kbit/s",
+                qdisc.ifindex, bandwidth_kbit
+            );
+            return Ok(());
+        }
+
         let mut socket = NetlinkSocket::new();
         let bandwidth = bandwidth_kbit * 1000 / 8;
 
