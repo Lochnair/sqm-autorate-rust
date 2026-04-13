@@ -19,13 +19,19 @@ use ::log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::{channel, sync_channel};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{channel, sync_channel, RecvTimeoutError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 use std::{process, thread};
+
+pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn signal_handler(_: libc::c_int) {
+    SHUTDOWN.store(true, Ordering::Relaxed);
+}
 
 use crate::config::{Config, MeasurementType};
 use crate::netlink::Netlink;
@@ -39,6 +45,11 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> anyhow::Result<()> {
     println!("Starting sqm-autorate version {}", VERSION);
+
+    unsafe {
+        libc::signal(libc::SIGINT, signal_handler as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, signal_handler as *const () as libc::sighandler_t);
+    }
 
     let config = Config::new()?;
     log::init(config.log_level)?;
