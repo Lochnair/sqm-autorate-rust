@@ -14,8 +14,10 @@ mod time;
 mod util;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
-use crate::metrics::Metrics;
+use crate::metrics::{Metric, Metrics};
+use crate::time::Time;
 use ::log::{debug, info};
+use rustix::time::ClockId;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -103,6 +105,15 @@ fn main() -> anyhow::Result<()> {
                     let _ = err_tx.send(e);
                 }
             })?;
+    }
+
+    if let Some(tx) = metrics_tx.clone() {
+        let _ = tx.try_send(Metric::Event {
+            name: "starting",
+            reason: "",
+            reflector: None,
+            timestamp_ns: Time::new(ClockId::Realtime).as_nanos(),
+        });
     }
 
     let ping_metrics_tx = metrics_tx
