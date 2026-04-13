@@ -1,9 +1,11 @@
+use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::util::{MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
@@ -28,6 +30,10 @@ impl ReflectorSelector {
         sleep(baseline_sleep_time);
 
         loop {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Reflector selector shutting down");
+                return Ok(());
+            }
             /*
              * Selection is triggered either by some other thread triggering it through the channel,
              * or it passes the timeout. In any case we don't care about the result of this function,

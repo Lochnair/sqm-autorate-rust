@@ -1,3 +1,4 @@
+use crate::SHUTDOWN;
 use crate::Config;
 use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
@@ -5,6 +6,7 @@ use crate::util::MutexExt;
 use log::info;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -45,6 +47,10 @@ impl Baseliner {
         let fast_factor = ewma_factor(self.config.tick_interval, 0.4);
 
         loop {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Baseliner shutting down");
+                return Ok(());
+            }
             let time_data = self.stats_rx.recv()?;
 
             let mut owd_baseline_map = self.owd_baseline.lock_anyhow()?;

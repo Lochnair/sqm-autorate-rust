@@ -1,10 +1,12 @@
+use crate::SHUTDOWN;
 use crate::MeasurementType;
 use crate::metrics::{Metric, MetricsSender};
 use crate::util::RwLockExt;
 use icmp_socket2::socket::IcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -58,6 +60,10 @@ pub trait PingListener {
         let socket = &mut open_socket(type_)?;
 
         loop {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Ping listener shutting down");
+                return Ok(());
+            }
             let (pkt, sender) = match socket.rcv_from() {
                 Ok(val) => val,
                 Err(_) => continue,
@@ -130,6 +136,10 @@ pub trait PingSender {
         let tick_duration_ms: u16 = (tick_interval * 1000.0) as u16;
 
         loop {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Ping sender shutting down");
+                return Ok(());
+            }
             // Clone the reflectors vec and drop the read lock immediately —
             // holding it for the entire tick would starve the reflector selector's write lock.
             let reflectors_unlocked = reflectors_lock.read_anyhow()?;

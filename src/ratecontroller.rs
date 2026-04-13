@@ -1,3 +1,4 @@
+use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::time::Time;
@@ -9,6 +10,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::net::IpAddr;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
@@ -326,6 +328,10 @@ impl Ratecontroller {
         }
 
         loop {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Rate controller shutting down");
+                return Ok(());
+            }
             sleep(sleep_time);
             let now_t = Instant::now();
 
