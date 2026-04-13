@@ -19,7 +19,7 @@ use ::log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, sync_channel, RecvTimeoutError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
@@ -95,7 +95,7 @@ fn main() -> anyhow::Result<()> {
     let (error_tx, error_rx) = channel::<anyhow::Error>();
     let (reselect_tx, reselect_rx) = channel();
 
-    let dropped = Arc::new(AtomicU64::new(0));
+    let dropped = Arc::new(AtomicU32::new(0));
 
     let (metrics_tx, metrics_thread_handle) = if config.observability_enabled {
         let (tx, rx) = sync_channel(1000);

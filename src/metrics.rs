@@ -5,7 +5,7 @@ use log::{error, info, warn};
 use rustix::time::ClockId;
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -116,18 +116,18 @@ pub enum Metric {
         tags: &'static [(&'static str, &'static str)],
     },
     Dropped {
-        count: u64,
+        count: u32,
     },
 }
 
 #[derive(Clone)]
 pub struct MetricsSender {
     tx: Option<SyncSender<(Metric, u64)>>,
-    dropped: Arc<AtomicU64>,
+    dropped: Arc<AtomicU32>,
 }
 
 impl MetricsSender {
-    pub fn new(tx: SyncSender<(Metric, u64)>, dropped: Arc<AtomicU64>) -> Self {
+    pub fn new(tx: SyncSender<(Metric, u64)>, dropped: Arc<AtomicU32>) -> Self {
         Self {
             tx: Some(tx),
             dropped,
@@ -137,7 +137,7 @@ impl MetricsSender {
     pub fn disabled() -> Self {
         Self {
             tx: None,
-            dropped: Arc::new(AtomicU64::new(0)),
+            dropped: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -153,7 +153,7 @@ impl MetricsSender {
 
 pub struct Metrics {
     pub config: Config,
-    pub metrics_dropped: Arc<AtomicU64>,
+    pub metrics_dropped: Arc<AtomicU32>,
     pub metrics_rx: Receiver<(Metric, u64)>,
 }
 
