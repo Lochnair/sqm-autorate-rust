@@ -1,10 +1,13 @@
-use log::{error, info, warn};
-
-use crate::Config;
 use crate::config::{MeasurementType, ObservabilityProtocol};
+use crate::time::Time;
+use crate::Config;
+use log::{error, info, warn};
+use rustix::time::ClockId;
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;
@@ -90,7 +93,6 @@ pub enum Metric {
         rtt: f64,
         up_time: f64,
         down_time: f64,
-        timestamp_ns: u64,
     },
     Rate {
         dl_rate: f64,
@@ -99,7 +101,6 @@ pub enum Metric {
         tx_load: f64,
         delta_delay_down: f64,
         delta_delay_up: f64,
-        timestamp_ns: u64,
     },
     Baseline {
         reflector: IpAddr,
@@ -107,19 +108,52 @@ pub enum Metric {
         baseline_down_ewma: f64,
         recent_up_ewma: f64,
         recent_down_ewma: f64,
-        timestamp_ns: u64,
     },
     Event {
         name: &'static str,
         reason: &'static str,
         reflector: Option<IpAddr>,
-        timestamp_ns: u64,
     },
+    Dropped {
+        count: u64,
+    },
+}
+
+#[derive(Clone)]
+pub struct MetricsSender {
+    tx: Option<SyncSender<(Metric, u64)>>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl MetricsSender {
+    pub fn new(tx: SyncSender<(Metric, u64)>, dropped: Arc<AtomicU64>) -> Self {
+        Self {
+            tx: Some(tx),
+            dropped,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            tx: None,
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn send(&self, metric: Metric) {
+        if let Some(ref tx) = self.tx {
+            let ts = Time::new(ClockId::Realtime).as_nanos();
+            if tx.try_send((metric, ts)).is_err() {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 pub struct Metrics {
     pub config: Config,
-    pub metrics_rx: Receiver<Metric>,
+    pub metrics_dropped: Arc<AtomicU64>,
+    pub metrics_rx: Receiver<(Metric, u64)>,
 }
 
 impl Metrics {
@@ -184,7 +218,7 @@ impl Metrics {
         Ok(())
     }
 
-    fn flush(&self, transport: &mut Transport, batch: &[Metric], host_tag: &str) {
+    fn flush(&self, transport: &mut Transport, batch: &[(Metric, u64)], host_tag: &str) {
         match transport {
             /*
              * the UDP receive buffer might be too small on the receiver to accept batched data,
@@ -192,23 +226,23 @@ impl Metrics {
              */
             Transport::Udp(_) => {
                 let mut data = String::with_capacity(300);
-                for metric in batch {
+                for (metric, timestamp_ns) in batch {
                     data.clear();
-                    self.write_lines(metric, host_tag, &mut data);
+                    self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
                     transport.send(&data);
                 }
             }
             Transport::Tcp { .. } => {
                 let mut data = String::with_capacity(batch.len() * 300);
-                for metric in batch {
-                    self.write_lines(metric, host_tag, &mut data);
+                for (metric, timestamp_ns) in batch {
+                    self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
                 }
                 transport.send(&data);
             }
         }
     }
 
-    fn write_lines(&self, metric: &Metric, host_tag: &str, out: &mut String) {
+    fn write_lines(&self, metric: &Metric, timestamp_ns: u64, host_tag: &str, out: &mut String) {
         match metric {
             Metric::Ping {
                 reflector,
@@ -216,7 +250,6 @@ impl Metrics {
                 rtt,
                 up_time,
                 down_time,
-                timestamp_ns,
             } => {
                 writeln!(
                     out,
@@ -232,7 +265,6 @@ impl Metrics {
                 tx_load,
                 delta_delay_down,
                 delta_delay_up,
-                timestamp_ns,
             } => {
                 writeln!(out,
                     "sqm_rate,host={host_tag},direction=download \
@@ -249,7 +281,6 @@ impl Metrics {
                 baseline_down_ewma,
                 recent_up_ewma,
                 recent_down_ewma,
-                timestamp_ns,
             } => {
                 writeln!(out,
                     "sqm_baseline,host={host_tag},reflector={reflector},direction=up \
@@ -264,7 +295,6 @@ impl Metrics {
                 name,
                 reason,
                 reflector,
-                timestamp_ns,
             } => {
                 let mut tags = format!("host={host_tag},type={name}");
 
@@ -276,6 +306,13 @@ impl Metrics {
                     write!(tags, ",reason={reason}").unwrap_or(());
                 }
                 writeln!(out, "sqm_event,{tags} count=1i {timestamp_ns}").unwrap_or(());
+            }
+            Metric::Dropped { count } => {
+                writeln!(
+                    out,
+                    "sqm_metrics_dropped,host={host_tag} count={count}i {timestamp_ns}"
+                )
+                .unwrap_or(());
             }
         }
     }
