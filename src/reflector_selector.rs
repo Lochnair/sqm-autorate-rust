@@ -1,12 +1,10 @@
-use crate::metrics::Metric;
-use crate::time::Time;
+use crate::metrics::{Metric, MetricsSender};
 use crate::util::{MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
-use rustix::time::ClockId;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -17,7 +15,7 @@ pub struct ReflectorSelector {
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub reflector_pool: Vec<IpAddr>,
     pub trigger_channel: Receiver<bool>,
-    pub metrics_tx: Option<SyncSender<Metric>>,
+    pub metrics: MetricsSender,
 }
 
 impl ReflectorSelector {
@@ -30,8 +28,6 @@ impl ReflectorSelector {
         sleep(baseline_sleep_time);
 
         loop {
-            // Capture current time at the start of each iteration for metric timestamps
-            let clock = Time::new(ClockId::Realtime);
             /*
              * Selection is triggered either by some other thread triggering it through the channel,
              * or it passes the timeout. In any case we don't care about the result of this function,
@@ -43,6 +39,11 @@ impl ReflectorSelector {
                 .is_ok();
             reselection_count += 1;
             info!("Starting reselection [#{}]", reselection_count);
+            self.metrics.send(Metric::Event {
+                name: "reflector_selection",
+                reason: if triggered { "triggered" } else { "timeout" },
+                reflector: None,
+            });
 
             // After 40 reselections, slow down to every 15 minutes
             if reselection_count > 40 {
@@ -123,31 +124,17 @@ impl ReflectorSelector {
 
             let mut new_peers = Vec::new();
             for i in 0..num_reflectors {
-                new_peers.push(candidates[i as usize].0);
-                info!(
-                    "New selected peer: {}",
-                    candidates[i as usize].0.to_string()
-                );
-            }
-
-            *reflectors_peers = new_peers.clone();
-
-            if let Some(ref tx) = self.metrics_tx {
-                let _ = tx.try_send(Metric::Event {
-                    name: "reflector_selection",
-                    reason: if triggered { "triggered" } else { "timeout" },
-                    reflector: None,
-                    timestamp_ns: clock.as_nanos(),
+                let peer = candidates[i as usize].0;
+                new_peers.push(peer);
+                info!("New selected peer: {}", peer);
+                self.metrics.send(Metric::Event {
+                    name: "reflector_selected",
+                    reason: "",
+                    reflector: Some(peer),
                 });
-                for peer in &new_peers {
-                    let _ = tx.try_send(Metric::Event {
-                        name: "reflector_selected",
-                        reason: "",
-                        reflector: Some(*peer),
-                        timestamp_ns: clock.as_nanos(),
-                    });
-                }
             }
+
+            *reflectors_peers = new_peers;
         }
     }
 }
