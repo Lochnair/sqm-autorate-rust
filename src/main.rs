@@ -97,7 +97,7 @@ fn main() -> anyhow::Result<()> {
 
     let dropped = Arc::new(AtomicU64::new(0));
 
-    let metrics_tx = if config.observability_enabled {
+    let (metrics_tx, metrics_thread_handle) = if config.observability_enabled {
         let (tx, rx) = sync_channel(1000);
         let metrics = Metrics {
             config: config.clone(),
@@ -105,16 +105,16 @@ fn main() -> anyhow::Result<()> {
             metrics_dropped: Arc::clone(&dropped),
         };
         let err_tx = error_tx.clone();
-        thread::Builder::new()
+        let handle = thread::Builder::new()
             .name("metrics".to_string())
             .spawn(move || {
                 if let Err(e) = metrics.run() {
                     let _ = err_tx.send(e);
                 }
             })?;
-        Some(tx)
+        (Some(tx), Some(handle))
     } else {
-        None
+        (None, None)
     };
 
     let make_sender = |enabled: bool| -> MetricsSender {
@@ -225,6 +225,8 @@ fn main() -> anyhow::Result<()> {
             }
         })?;
 
+    let main_event_metrics = event_metrics.clone();
+
     if reflector_pool_size > config.num_reflectors as usize {
         let reflector_selector = ReflectorSelector {
             config: config.clone(),
@@ -292,12 +294,45 @@ fn main() -> anyhow::Result<()> {
             }
         })?;
 
-    // Drop original sender so recv() unblocks if all threads exit cleanly
+    // Drop original sender so the channel disconnects if all threads exit cleanly
     drop(error_tx);
 
-    // Wait for first error
-    match error_rx.recv() {
-        Ok(e) => Err(anyhow::anyhow!("thread exited with error: {e}")),
-        Err(_) => Ok(()), // all senders dropped = all threads exited without error
+    let result = loop {
+        match error_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(e) => break Err(anyhow::anyhow!("thread exited with error: {e}")),
+            Err(RecvTimeoutError::Disconnected) => break Ok(()),
+            Err(RecvTimeoutError::Timeout) => {
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    info!("Received shutdown signal");
+                    break Ok(());
+                }
+            }
+        }
+    };
+
+    let stopping_reason = if result.is_err() { "error" } else { "signal" };
+    main_event_metrics.send(Metric::Event {
+        name: "stopping",
+        reason: stopping_reason,
+        reflector: None,
+        tags: &[],
+    });
+
+    // Drop all MetricsSender instances and the raw tx so the metrics channel
+    // disconnects once all threads also drop their copies, allowing the
+    // metrics thread to drain and exit cleanly.
+    drop(main_event_metrics);
+    drop(metrics_tx);
+    if let Some(handle) = metrics_thread_handle {
+        let _ = handle.join();
     }
+
+    info!(
+        "Restoring base shaper rates (D/L): {} / {}",
+        config.download_base_kbits, config.upload_base_kbits
+    );
+    let _ = Netlink::set_qdisc_rate(down_qdisc, config.download_base_kbits as u64, config.dry_run);
+    let _ = Netlink::set_qdisc_rate(up_qdisc, config.upload_base_kbits as u64, config.dry_run);
+
+    result
 }
