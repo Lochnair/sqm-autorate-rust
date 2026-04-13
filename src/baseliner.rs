@@ -1,10 +1,13 @@
+use crate::metrics::Metric;
 use crate::pinger::PingReply;
+use crate::time::Time;
 use crate::util::MutexExt;
-use crate::Config;
+use crate::{Config, time};
 use log::info;
+use rustix::time::ClockId;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -22,6 +25,7 @@ pub struct Baseliner {
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
     pub stats_receiver: Receiver<PingReply>,
+    pub metrics_sender: SyncSender<Metric>,
 }
 
 fn ewma_factor(tick: f64, dur: f64) -> f64 {
@@ -40,6 +44,9 @@ impl Baseliner {
          */
         let slow_factor = ewma_factor(self.config.tick_interval, 135.0);
         let fast_factor = ewma_factor(self.config.tick_interval, 0.4);
+
+        // We need a realtime clock when exporting metrics
+        let clock = Time::new(ClockId::Realtime);
 
         loop {
             let time_data = self.stats_receiver.recv()?;
@@ -100,6 +107,12 @@ impl Baseliner {
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
                     time_data.reflector
                 );
+                let _ = self.metrics_sender.try_send(Metric::Event {
+                    name: "reselection",
+                    reason: "anomaly",
+                    reflector: Some(time_data.reflector),
+                    timestamp_ns: clock.as_nanos(),
+                });
                 // If reselection is disabled this would trigger an error
                 // so just ignore the result
                 let _ = self.reselect_trigger.send(true);
@@ -122,6 +135,15 @@ impl Baseliner {
                     owd_baseline.up_ewma = owd_recent.up_ewma;
                 }
             }
+
+            let _ = self.metrics_sender.try_send(Metric::Baseline {
+                reflector: time_data.reflector,
+                baseline_up_ewma: owd_baseline.up_ewma,
+                baseline_down_ewma: owd_baseline.down_ewma,
+                recent_up_ewma: owd_recent.up_ewma,
+                recent_down_ewma: owd_recent.down_ewma,
+                timestamp_ns: clock.as_nanos(),
+            });
 
             info!(
                 "Reflector {} up baseline = {} down baseline = {}",
