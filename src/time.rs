@@ -28,6 +28,10 @@ impl Time {
         self.time_ns
     }
 
+    pub fn as_nanos(&self) -> u64 {
+        self.time_s * 1_000_000_000 + self.time_ns
+    }
+
     pub fn as_secs_f64(&self) -> f64 {
         self.time_s as f64 + self.time_ns as f64 / 1_000_000_000.0
     }

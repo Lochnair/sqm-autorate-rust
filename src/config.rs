@@ -4,6 +4,8 @@ use log::Level;
 use log::warn;
 #[cfg(feature = "uci")]
 use rust_uci::Uci;
+use std::fmt;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::BufRead;
 use std::net::IpAddr;
@@ -41,6 +43,17 @@ pub enum MeasurementType {
     TcpTimestamps,
 }
 
+impl Display for MeasurementType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MeasurementType::Icmp => write!(f, "icmp"),
+            MeasurementType::IcmpTimestamps => write!(f, "icmp-timestamps"),
+            MeasurementType::Ntp => write!(f, "ntp"),
+            MeasurementType::TcpTimestamps => write!(f, "tcp-timestamps"),
+        }
+    }
+}
+
 impl FromStr for MeasurementType {
     type Err = ConfigError;
 
@@ -52,6 +65,24 @@ impl FromStr for MeasurementType {
             "tcp-timestamps" => Ok(MeasurementType::TcpTimestamps),
             &_ => Err(ConfigError::InvalidMeasurementType(s.to_string())),
         };
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ObservabilityProtocol {
+    Udp,
+    Tcp,
+}
+
+impl FromStr for ObservabilityProtocol {
+    type Err = ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "udp" => Ok(ObservabilityProtocol::Udp),
+            "tcp" => Ok(ObservabilityProtocol::Tcp),
+            _ => Err(ConfigError::InvalidMeasurementType(s.to_string())),
+        }
     }
 }
 
@@ -72,6 +103,19 @@ pub struct Config {
     pub speed_hist_file: String,
     pub stats_file: String,
     pub suppress_statistics: bool,
+
+    // Observability section
+    pub observability_enabled: bool,
+    pub observability_protocol: ObservabilityProtocol,
+    pub observability_host: Option<String>,
+    pub observability_port: u16,
+    pub observability_batch_size: usize,
+    pub observability_batch_timeout_ms: u64,
+    pub observability_export_ping_metrics: bool,
+    pub observability_export_rate_metrics: bool,
+    pub observability_export_baseline_metrics: bool,
+    pub observability_export_events: bool,
+    pub observability_host_tag: String,
 
     // Advanced section
     pub download_delay_ms: f64,
@@ -138,6 +182,59 @@ impl Config {
                 "sqm-autorate.@output[0].suppress_statistics",
                 Some(false),
             )?,
+
+            // Observability section
+            observability_enabled: Self::get::<bool>(
+                "SQMA_OBSERVABILITY_ENABLED",
+                "sqm-autorate.@observability[0].enabled",
+                Some(false),
+            )?,
+            observability_protocol: Self::get::<ObservabilityProtocol>(
+                "SQMA_OBSERVABILITY_PROTOCOL",
+                "sqm-autorate.@observability[0].protocol",
+                Some(ObservabilityProtocol::Udp),
+            )?,
+            observability_host: Self::get_optional::<String>(
+                "SQMA_OBSERVABILITY_HOST",
+                "sqm-autorate.@observability[0].host",
+            ),
+            observability_port: Self::get::<u16>(
+                "SQMA_OBSERVABILITY_PORT",
+                "sqm-autorate.@observability[0].port",
+                Some(8089),
+            )?,
+            observability_batch_size: Self::get::<usize>(
+                "SQMA_OBSERVABILITY_BATCH_SIZE",
+                "sqm-autorate.@observability[0].batch_size",
+                Some(25),
+            )?,
+            observability_batch_timeout_ms: Self::get::<u64>(
+                "SQMA_OBSERVABILITY_BATCH_TIMEOUT_MS",
+                "sqm-autorate.@observability[0].batch_timeout_ms",
+                Some(100),
+            )?,
+            observability_export_ping_metrics: Self::get::<bool>(
+                "SQMA_OBSERVABILITY_EXPORT_PING_METRICS",
+                "sqm-autorate.@observability[0].export_ping_metrics",
+                Some(false),
+            )?,
+            observability_export_rate_metrics: Self::get::<bool>(
+                "SQMA_OBSERVABILITY_EXPORT_RATE_METRICS",
+                "sqm-autorate.@observability[0].export_rate_metrics",
+                Some(true),
+            )?,
+            observability_export_baseline_metrics: Self::get::<bool>(
+                "SQMA_OBSERVABILITY_EXPORT_BASELINE_METRICS",
+                "sqm-autorate.@observability[0].export_baseline_metrics",
+                Some(false),
+            )?,
+            observability_export_events: Self::get::<bool>(
+                "SQMA_OBSERVABILITY_EXPORT_EVENTS",
+                "sqm-autorate.@observability[0].export_events",
+                Some(true),
+            )?,
+            observability_host_tag: Self::get_host_tag(),
+
             // Advanced section
             download_delay_ms: Self::get::<f64>(
                 "SQMA_DOWNLOAD_DELAY_MS",
@@ -233,6 +330,24 @@ impl Config {
                 None => Err(ConfigError::MissingValue(env_key.to_string())),
             },
         }
+    }
+
+    fn get_host_tag() -> String {
+        if let Ok(val) = env::var("SQMA_OBSERVABILITY_HOST_TAG") {
+            if !val.is_empty() {
+                return val;
+            }
+        }
+
+        // rustix can give us the hostname without shelling out
+        rustix::system::uname()
+            .nodename()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn get_optional<T: FromStr>(env_key: &str, uci_key: &str) -> Option<T> {
+        Self::get_value(env_key, uci_key).and_then(|val| val.parse::<T>().ok())
     }
 
     fn get_value(env_key: &str, uci_key: &str) -> Option<String> {
