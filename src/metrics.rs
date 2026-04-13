@@ -189,6 +189,11 @@ impl Metrics {
             match self.metrics_rx.recv_timeout(timeout) {
                 Ok(metric) => batch.push(metric),
                 Err(RecvTimeoutError::Timeout) => {
+                    let dropped = self.metrics_dropped.swap(0, Ordering::Relaxed);
+                    if dropped > 0 {
+                        let ts = Time::new(ClockId::Realtime).as_nanos();
+                        batch.push((Metric::Dropped { count: dropped }, ts));
+                    }
                     if !batch.is_empty() {
                         self.flush(&mut transport, &batch, host_tag);
                         batch.clear();
