@@ -120,7 +120,7 @@ pub enum Metric {
 
 pub struct Metrics {
     pub config: Config,
-    pub metrics_receiver: Receiver<Metric>,
+    pub metrics_rx: Receiver<Metric>,
 }
 
 impl Metrics {
@@ -153,7 +153,7 @@ impl Metrics {
 
         loop {
             // block until first metric or timeout
-            match self.metrics_receiver.recv_timeout(timeout) {
+            match self.metrics_rx.recv_timeout(timeout) {
                 Ok(metric) => batch.push(metric),
                 Err(RecvTimeoutError::Timeout) => {
                     if !batch.is_empty() {
@@ -167,7 +167,7 @@ impl Metrics {
 
             // greedily drain without blocking
             loop {
-                match self.metrics_receiver.try_recv() {
+                match self.metrics_rx.try_recv() {
                     Ok(metric) => batch.push(metric),
                     Err(_) => break,
                 }

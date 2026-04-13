@@ -109,7 +109,7 @@ pub struct Ratecontroller {
     state_dl: State,
     state_ul: State,
     up_direction: StatsDirection,
-    metrics_sender: SyncSender<Metric>,
+    metrics_tx: SyncSender<Metric>,
 }
 
 impl Ratecontroller {
@@ -248,7 +248,7 @@ impl Ratecontroller {
         reselect_trigger: Sender<bool>,
         down_direction: StatsDirection,
         up_direction: StatsDirection,
-        metrics_sender: SyncSender<Metric>,
+        metrics_tx: SyncSender<Metric>,
     ) -> anyhow::Result<Self> {
         let dl_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
         let dl_safe_rates =
@@ -269,7 +269,7 @@ impl Ratecontroller {
             state_dl: State::new(dl_qdisc, cur_rx, dl_safe_rates),
             state_ul: State::new(ul_qdisc, cur_tx, ul_safe_rates),
             up_direction,
-            metrics_sender,
+            metrics_tx,
         })
     }
 

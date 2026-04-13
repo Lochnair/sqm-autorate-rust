@@ -24,8 +24,8 @@ pub struct Baseliner {
     pub owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
-    pub stats_receiver: Receiver<PingReply>,
-    pub metrics_sender: SyncSender<Metric>,
+    pub stats_rx: Receiver<PingReply>,
+    pub metrics_tx: SyncSender<Metric>,
 }
 
 fn ewma_factor(tick: f64, dur: f64) -> f64 {
@@ -49,7 +49,7 @@ impl Baseliner {
         let clock = Time::new(ClockId::Realtime);
 
         loop {
-            let time_data = self.stats_receiver.recv()?;
+            let time_data = self.stats_rx.recv()?;
 
             let mut owd_baseline_map = self.owd_baseline.lock_anyhow()?;
             let mut owd_recent_map = self.owd_recent.lock_anyhow()?;
@@ -107,7 +107,7 @@ impl Baseliner {
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
                     time_data.reflector
                 );
-                let _ = self.metrics_sender.try_send(Metric::Event {
+                let _ = self.metrics_tx.try_send(Metric::Event {
                     name: "reselection",
                     reason: "anomaly",
                     reflector: Some(time_data.reflector),
@@ -136,7 +136,7 @@ impl Baseliner {
                 }
             }
 
-            let _ = self.metrics_sender.try_send(Metric::Baseline {
+            let _ = self.metrics_tx.try_send(Metric::Baseline {
                 reflector: time_data.reflector,
                 baseline_up_ewma: owd_baseline.up_ewma,
                 baseline_down_ewma: owd_baseline.down_ewma,

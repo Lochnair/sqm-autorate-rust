@@ -54,8 +54,8 @@ pub trait PingListener {
         id: u16,
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
-        stats_sender: Sender<PingReply>,
-        metrics_sender: SyncSender<Metric>,
+        stats_tx: Sender<PingReply>,
+        metrics_tx: SyncSender<Metric>,
     ) -> anyhow::Result<()> {
         let socket = &mut open_socket(type_)?;
 
@@ -84,7 +84,7 @@ pub trait PingListener {
                 }
             };
 
-            let _ = metrics_sender.try_send(Metric::Ping {
+            let _ = metrics_tx.try_send(Metric::Ping {
                 reflector: reply.reflector,
                 measurement_type: reply.measurement_type,
                 rtt: reply.rtt,
@@ -106,7 +106,7 @@ pub trait PingListener {
                 reply.up_time,
                 reply.down_time
             );
-            if let Err(e) = stats_sender.send(reply) {
+            if let Err(e) = stats_tx.send(reply) {
                 warn!("Stats channel closed, stopping listener: {}", e);
                 break Ok(());
             }
