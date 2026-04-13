@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 use std::time::Instant;
 
+use crate::config::MeasurementType;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;
 use icmp_socket2::Icmpv4Message;
@@ -14,7 +15,13 @@ pub struct PingerICMPEchoSender {}
 
 impl PingListener for PingerICMPEchoListener {
     // Result: RTT, down time, up time
-    fn parse_packet(&self, id: u16, reflector: IpAddr, pkt: Icmpv4Packet) -> Result<PingReply, PingError> {
+    fn parse_packet(
+        &self,
+        id: u16,
+        reflector: IpAddr,
+        measurement_type: MeasurementType,
+        pkt: Icmpv4Packet,
+    ) -> Result<PingReply, PingError> {
         match pkt.typ {
             0 => {
                 if let Icmpv4Message::EchoReply {
@@ -33,32 +40,37 @@ impl PingListener for PingerICMPEchoListener {
                     let time_sent = match payload.as_slice().try_into() {
                         Ok(bytes) => u64::from_be_bytes(bytes) as i64,
                         Err(_) => {
-                            return Err(PingError::InvalidPacket(format!("Expected 8 bytes payload, but found {}", payload.len())))
+                            return Err(PingError::InvalidPacket(format!(
+                                "Expected 8 bytes payload, but found {}",
+                                payload.len()
+                            )));
                         }
                     };
 
                     let clock = Time::new(ClockId::Monotonic);
                     let time_ms = clock.to_milliseconds() as i64;
 
-                    let rtt: i64 = time_ms - time_sent;
+                    let rtt = (time_ms - time_sent) as f64;
                     Ok(PingReply {
                         reflector,
+                        measurement_type,
                         seq: sequence,
                         rtt,
                         current_time: time_ms,
-                        down_time: (rtt / 2) as f64,
-                        up_time: (rtt / 2) as f64,
+                        down_time: (rtt / 2.0) as f64,
+                        up_time: (rtt / 2.0) as f64,
                         originate_timestamp: time_sent,
                         receive_timestamp: 0,
                         transmit_timestamp: 0,
                         last_receive_time_s: Instant::now(),
                     })
                 } else {
-                    Err(PingError::InvalidPacket(format!("Packet had type {:?}, but did not match the structure", pkt.typ)))
+                    Err(PingError::InvalidPacket(format!(
+                        "Packet had type {:?}, but did not match the structure",
+                        pkt.typ
+                    )))
                 }
-
-                
-            },
+            }
             type_ => Err(PingError::InvalidType(format!("{:?}", type_))),
         }
     }

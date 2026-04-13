@@ -1,10 +1,13 @@
 use crate::MeasurementType;
+use crate::metrics::Metric;
+use crate::time::Time;
+use crate::util::RwLockExt;
 use icmp_socket2::socket::IcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
-use crate::util::RwLockExt;
 use log::{debug, warn};
+use rustix::time::ClockId;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{io, thread};
@@ -24,8 +27,9 @@ pub enum PingError {
 
 pub struct PingReply {
     pub reflector: IpAddr,
+    pub measurement_type: MeasurementType,
     pub seq: u16,
-    pub rtt: i64,
+    pub rtt: f64,
     pub current_time: i64,
     pub down_time: f64,
     pub up_time: f64,
@@ -37,9 +41,7 @@ pub struct PingReply {
 
 fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
     match type_ {
-        MeasurementType::Icmp | MeasurementType::IcmpTimestamps => {
-            IcmpSocket4::new()
-        },
+        MeasurementType::Icmp | MeasurementType::IcmpTimestamps => IcmpSocket4::new(),
         _ => {
             unimplemented!()
         }
@@ -53,8 +55,12 @@ pub trait PingListener {
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_sender: Sender<PingReply>,
+        metrics_sender: SyncSender<Metric>,
     ) -> anyhow::Result<()> {
         let socket = &mut open_socket(type_)?;
+
+        // We need a realtime clock when exporting metrics
+        let clock = Time::new(ClockId::Realtime);
 
         loop {
             let (pkt, sender) = match socket.rcv_from() {
@@ -69,7 +75,7 @@ pub trait PingListener {
                 continue;
             }
 
-            let reply = match self.parse_packet(id, addr, pkt) {
+            let reply = match self.parse_packet(id, addr, type_, pkt) {
                 Ok(val) => val,
                 Err(_) => {
                     // parse_packet will throw an error if it's an unknown protocol etc.
@@ -78,7 +84,28 @@ pub trait PingListener {
                 }
             };
 
-            debug!("Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}", "ICMP", addr.to_string(), reply.seq, reply.current_time, reply.originate_timestamp, reply.receive_timestamp, reply.transmit_timestamp, reply.rtt, reply.up_time, reply.down_time);
+            let _ = metrics_sender.try_send(Metric::Ping {
+                reflector: reply.reflector,
+                measurement_type: reply.measurement_type,
+                rtt: reply.rtt,
+                up_time: reply.up_time,
+                down_time: reply.down_time,
+                timestamp_ns: clock.as_nanos(),
+            });
+
+            debug!(
+                "Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}",
+                "ICMP",
+                addr.to_string(),
+                reply.seq,
+                reply.current_time,
+                reply.originate_timestamp,
+                reply.receive_timestamp,
+                reply.transmit_timestamp,
+                reply.rtt,
+                reply.up_time,
+                reply.down_time
+            );
             if let Err(e) = stats_sender.send(reply) {
                 warn!("Stats channel closed, stopping listener: {}", e);
                 break Ok(());
@@ -86,7 +113,13 @@ pub trait PingListener {
         }
     }
 
-    fn parse_packet(&self, id: u16, reflector: IpAddr, pkt: Icmpv4Packet) -> Result<PingReply, PingError>;
+    fn parse_packet(
+        &self,
+        id: u16,
+        reflector: IpAddr,
+        measurement_type: MeasurementType,
+        pkt: Icmpv4Packet,
+    ) -> Result<PingReply, PingError>;
 }
 
 pub trait PingSender {
