@@ -5,7 +5,6 @@ use crate::config::{MeasurementType, ObservabilityProtocol};
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::thread::sleep;
 use std::time::Duration;
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;

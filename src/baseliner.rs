@@ -1,8 +1,8 @@
+use crate::Config;
 use crate::metrics::Metric;
 use crate::pinger::PingReply;
 use crate::time::Time;
 use crate::util::MutexExt;
-use crate::{Config, time};
 use log::info;
 use rustix::time::ClockId;
 use std::collections::HashMap;
