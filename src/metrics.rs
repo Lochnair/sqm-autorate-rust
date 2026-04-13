@@ -186,6 +186,10 @@ impl Metrics {
 
     fn flush(&self, transport: &mut Transport, batch: &[Metric], host_tag: &str) {
         match transport {
+            /*
+             * the UDP receive buffer might be too small on the receiver to accept batched data,
+             * and it'll get cutoff in the middle of a record. so send metrics directly on UDP
+             */
             Transport::Udp(_) => {
                 let mut data = String::with_capacity(300);
                 for metric in batch {
