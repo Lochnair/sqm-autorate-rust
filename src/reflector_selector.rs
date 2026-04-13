@@ -1,9 +1,10 @@
+use crate::metrics::Metric;
 use crate::util::{MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -14,6 +15,7 @@ pub struct ReflectorSelector {
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub reflector_pool: Vec<IpAddr>,
     pub trigger_channel: Receiver<bool>,
+    pub metrics_sender: SyncSender<Metric>,
 }
 
 impl ReflectorSelector {
@@ -54,7 +56,8 @@ impl ReflectorSelector {
             }
 
             for _ in 0..20 {
-                let next_candidate = &self.reflector_pool[fastrand::usize(..self.reflector_pool.len())];
+                let next_candidate =
+                    &self.reflector_pool[fastrand::usize(..self.reflector_pool.len())];
                 if next_peers.contains(next_candidate) {
                     continue;
                 }

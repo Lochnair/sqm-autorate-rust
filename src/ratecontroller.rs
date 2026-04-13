@@ -1,3 +1,4 @@
+use crate::metrics::Metric;
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::time::Time;
 use crate::util::{MutexExt, RwLockExt};
@@ -8,7 +9,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::net::IpAddr;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -108,6 +109,7 @@ pub struct Ratecontroller {
     state_dl: State,
     state_ul: State,
     up_direction: StatsDirection,
+    metrics_sender: SyncSender<Metric>,
 }
 
 impl Ratecontroller {
@@ -151,9 +153,7 @@ impl Ratecontroller {
                     / dur.as_secs_f64();
                 state.load = state.utilisation / state.current_rate;
 
-                if state.delta_stat < delay_ms
-                    && state.load > self.config.high_load_level
-                {
+                if state.delta_stat < delay_ms && state.load > self.config.high_load_level {
                     state.safe_rates[state.nrate] = (state.current_rate * state.load).floor();
                     let max_rate = state
                         .safe_rates
@@ -168,10 +168,12 @@ impl Ratecontroller {
                 }
 
                 if state.delta_stat > delay_ms {
-                    match state.safe_rates.get(fastrand::usize(..state.safe_rates.len())) {
+                    match state
+                        .safe_rates
+                        .get(fastrand::usize(..state.safe_rates.len()))
+                    {
                         Some(rnd_rate) => {
-                            state.next_rate =
-                                rnd_rate.min(0.9 * state.current_rate * state.load);
+                            state.next_rate = rnd_rate.min(0.9 * state.current_rate * state.load);
                         }
                         None => {
                             state.next_rate = 0.9 * state.current_rate * state.load;
@@ -246,6 +248,7 @@ impl Ratecontroller {
         reselect_trigger: Sender<bool>,
         down_direction: StatsDirection,
         up_direction: StatsDirection,
+        metrics_sender: SyncSender<Metric>,
     ) -> anyhow::Result<Self> {
         let dl_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
         let dl_safe_rates =
@@ -266,6 +269,7 @@ impl Ratecontroller {
             state_dl: State::new(dl_qdisc, cur_rx, dl_safe_rates),
             state_ul: State::new(ul_qdisc, cur_tx, ul_safe_rates),
             up_direction,
+            metrics_sender,
         })
     }
 
@@ -374,11 +378,19 @@ impl Ratecontroller {
                 }
 
                 if self.state_dl.next_rate != self.state_dl.current_rate {
-                    Netlink::set_qdisc_rate(self.state_dl.qdisc, self.state_dl.next_rate as u64, self.config.dry_run)?;
+                    Netlink::set_qdisc_rate(
+                        self.state_dl.qdisc,
+                        self.state_dl.next_rate as u64,
+                        self.config.dry_run,
+                    )?;
                 }
 
                 if self.state_ul.next_rate != self.state_ul.current_rate {
-                    Netlink::set_qdisc_rate(self.state_ul.qdisc, self.state_ul.next_rate as u64, self.config.dry_run)?;
+                    Netlink::set_qdisc_rate(
+                        self.state_ul.qdisc,
+                        self.state_ul.next_rate as u64,
+                        self.config.dry_run,
+                    )?;
                 }
 
                 self.state_dl.current_rate = self.state_dl.next_rate;
