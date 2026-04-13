@@ -1,13 +1,11 @@
 use crate::MeasurementType;
-use crate::metrics::Metric;
-use crate::time::Time;
+use crate::metrics::{Metric, MetricsSender};
 use crate::util::RwLockExt;
 use icmp_socket2::socket::IcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
 use log::{debug, warn};
-use rustix::time::ClockId;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::mpsc::{Sender, SyncSender};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{io, thread};
@@ -55,13 +53,11 @@ pub trait PingListener {
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_tx: Sender<PingReply>,
-        ping_metrics_tx: Option<SyncSender<Metric>>,
+        ping_metrics: MetricsSender,
     ) -> anyhow::Result<()> {
         let socket = &mut open_socket(type_)?;
 
         loop {
-            // Capture current time at the start of each iteration for metric timestamps
-            let clock = Time::new(ClockId::Realtime);
             let (pkt, sender) = match socket.rcv_from() {
                 Ok(val) => val,
                 Err(_) => continue,
@@ -83,16 +79,13 @@ pub trait PingListener {
                 }
             };
 
-            if let Some(ref tx) = ping_metrics_tx {
-                let _ = tx.try_send(Metric::Ping {
-                    reflector: reply.reflector,
-                    measurement_type: reply.measurement_type,
-                    rtt: reply.rtt,
-                    up_time: reply.up_time,
-                    down_time: reply.down_time,
-                    timestamp_ns: clock.as_nanos(),
-                });
-            }
+            ping_metrics.send(Metric::Ping {
+                reflector: reply.reflector,
+                measurement_type: reply.measurement_type,
+                rtt: reply.rtt,
+                up_time: reply.up_time,
+                down_time: reply.down_time,
+            });
 
             debug!(
                 "Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}",
