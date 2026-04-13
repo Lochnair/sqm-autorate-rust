@@ -113,6 +113,7 @@ pub enum Metric {
         name: &'static str,
         reason: &'static str,
         reflector: Option<IpAddr>,
+        tags: &'static [(&'static str, &'static str)],
     },
     Dropped {
         count: u64,
@@ -300,17 +301,23 @@ impl Metrics {
                 name,
                 reason,
                 reflector,
+                tags,
             } => {
-                let mut tags = format!("host={host_tag},type={name}");
+                let mut tag_str = format!("host={host_tag},type={name}");
 
                 if let Some(reflector) = reflector {
-                    write!(tags, ",reflector={reflector}").unwrap_or(());
+                    write!(tag_str, ",reflector={reflector}").unwrap_or(());
                 }
 
                 if !reason.is_empty() {
-                    write!(tags, ",reason={reason}").unwrap_or(());
+                    write!(tag_str, ",reason={reason}").unwrap_or(());
                 }
-                writeln!(out, "sqm_event,{tags} count=1i {timestamp_ns}").unwrap_or(());
+
+                for (k, v) in *tags {
+                    write!(tag_str, ",{k}={v}").unwrap_or(());
+                }
+
+                writeln!(out, "sqm_event,{tag_str} count=1i {timestamp_ns}").unwrap_or(());
             }
             Metric::Dropped { count } => {
                 writeln!(

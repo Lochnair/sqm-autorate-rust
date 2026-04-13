@@ -43,6 +43,7 @@ impl ReflectorSelector {
                 name: "reflector_selection",
                 reason: if triggered { "triggered" } else { "timeout" },
                 reflector: None,
+                tags: &[],
             });
 
             // After 40 reselections, slow down to every 15 minutes
@@ -131,6 +132,7 @@ impl ReflectorSelector {
                     name: "reflector_selected",
                     reason: "",
                     reflector: Some(peer),
+                    tags: &[],
                 });
             }
 

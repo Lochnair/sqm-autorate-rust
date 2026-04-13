@@ -123,6 +123,7 @@ fn main() -> anyhow::Result<()> {
         name: "starting",
         reason: "",
         reflector: None,
+        tags: if config.dry_run { &[("dry_run", "true")] } else { &[] },
     });
 
     let (mut ping_listener, mut ping_sender) = match config.measurement_type {

@@ -339,6 +339,12 @@ impl Ratecontroller {
                     warn!(
                         "One or both Netlink stats could not be read. Skipping rate control algorithm"
                     );
+                    self.metrics.send(Metric::Event {
+                        name: "netlink_read_failure",
+                        reason: "",
+                        reflector: None,
+                        tags: &[],
+                    });
                     continue;
                 }
 
@@ -346,6 +352,12 @@ impl Ratecontroller {
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
                     warn!("No reflector data available, dropping to minimum rates");
+                    self.metrics.send(Metric::Event {
+                        name: "reflector_unavailable",
+                        reason: "",
+                        reflector: None,
+                        tags: &[],
+                    });
                     self.state_dl.next_rate = self.config.download_min_kbits;
                     self.state_ul.next_rate = self.config.upload_min_kbits;
 

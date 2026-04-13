@@ -107,6 +107,7 @@ impl Baseliner {
                     name: "reselection",
                     reason: "anomaly",
                     reflector: Some(time_data.reflector),
+                    tags: &[],
                 });
                 // If reselection is disabled this would trigger an error
                 // so just ignore the result
