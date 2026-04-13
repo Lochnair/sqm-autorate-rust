@@ -1,13 +1,11 @@
 use crate::Config;
-use crate::metrics::Metric;
+use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
-use crate::time::Time;
 use crate::util::MutexExt;
 use log::info;
-use rustix::time::ClockId;
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::mpsc::{Receiver, Sender, SyncSender};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -25,8 +23,8 @@ pub struct Baseliner {
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
     pub stats_rx: Receiver<PingReply>,
-    pub baseline_metrics_tx: Option<SyncSender<Metric>>,
-    pub event_metrics_tx: Option<SyncSender<Metric>>,
+    pub baseline_metrics: MetricsSender,
+    pub event_metrics: MetricsSender,
 }
 
 fn ewma_factor(tick: f64, dur: f64) -> f64 {
@@ -47,8 +45,6 @@ impl Baseliner {
         let fast_factor = ewma_factor(self.config.tick_interval, 0.4);
 
         loop {
-            // Capture current time at the start of each iteration for metric timestamps
-            let clock = Time::new(ClockId::Realtime);
             let time_data = self.stats_rx.recv()?;
 
             let mut owd_baseline_map = self.owd_baseline.lock_anyhow()?;
@@ -107,14 +103,11 @@ impl Baseliner {
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
                     time_data.reflector
                 );
-                if let Some(ref tx) = self.event_metrics_tx {
-                    let _ = tx.try_send(Metric::Event {
-                        name: "reselection",
-                        reason: "anomaly",
-                        reflector: Some(time_data.reflector),
-                        timestamp_ns: clock.as_nanos(),
-                    });
-                }
+                self.event_metrics.send(Metric::Event {
+                    name: "reselection",
+                    reason: "anomaly",
+                    reflector: Some(time_data.reflector),
+                });
                 // If reselection is disabled this would trigger an error
                 // so just ignore the result
                 let _ = self.reselect_trigger.send(true);
@@ -138,16 +131,13 @@ impl Baseliner {
                 }
             }
 
-            if let Some(ref tx) = self.baseline_metrics_tx {
-                let _ = tx.try_send(Metric::Baseline {
-                    reflector: time_data.reflector,
-                    baseline_up_ewma: owd_baseline.up_ewma,
-                    baseline_down_ewma: owd_baseline.down_ewma,
-                    recent_up_ewma: owd_recent.up_ewma,
-                    recent_down_ewma: owd_recent.down_ewma,
-                    timestamp_ns: clock.as_nanos(),
-                });
-            }
+            self.baseline_metrics.send(Metric::Baseline {
+                reflector: time_data.reflector,
+                baseline_up_ewma: owd_baseline.up_ewma,
+                baseline_down_ewma: owd_baseline.down_ewma,
+                recent_up_ewma: owd_recent.up_ewma,
+                recent_down_ewma: owd_recent.down_ewma,
+            });
 
             info!(
                 "Reflector {} up baseline = {} down baseline = {}",
