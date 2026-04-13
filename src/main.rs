@@ -84,17 +84,14 @@ fn main() -> anyhow::Result<()> {
     let (error_tx, error_rx) = channel::<anyhow::Error>();
     let (reselect_tx, reselect_rx) = channel();
 
-    let (metrics_tx, metrics_rx) = if config.observability_enabled {
-        let (tx, rx) = sync_channel(1000);
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
+    let dropped = Arc::new(AtomicU64::new(0));
 
-    if let Some(rx) = metrics_rx {
+    let metrics_tx = if config.observability_enabled {
+        let (tx, rx) = sync_channel(1000);
         let metrics = Metrics {
             config: config.clone(),
             metrics_rx: rx,
+            metrics_dropped: Arc::clone(&dropped),
         };
         let err_tx = error_tx.clone();
         thread::Builder::new()
@@ -104,36 +101,29 @@ fn main() -> anyhow::Result<()> {
                     let _ = err_tx.send(e);
                 }
             })?;
-    }
+        Some(tx)
+    } else {
+        None
+    };
 
-    if let Some(tx) = metrics_tx.clone() {
-        let _ = tx.try_send(Metric::Event {
-            name: "starting",
-            reason: "",
-            reflector: None,
-            timestamp_ns: Time::new(ClockId::Realtime).as_nanos(),
-        });
-    }
+    let make_sender = |enabled: bool| -> MetricsSender {
+        metrics_tx
+            .as_ref()
+            .filter(|_| enabled)
+            .map(|tx| MetricsSender::new(tx.clone(), Arc::clone(&dropped)))
+            .unwrap_or_else(MetricsSender::disabled)
+    };
 
-    let ping_metrics_tx = metrics_tx
-        .as_ref()
-        .filter(|_| config.observability_export_ping_metrics)
-        .cloned();
+    let ping_metrics = make_sender(config.observability_export_ping_metrics);
+    let baseline_metrics = make_sender(config.observability_export_baseline_metrics);
+    let event_metrics = make_sender(config.observability_export_events);
+    let rate_metrics = make_sender(config.observability_export_rate_metrics);
 
-    let baseline_metrics_tx = metrics_tx
-        .as_ref()
-        .filter(|_| config.observability_export_baseline_metrics)
-        .cloned();
-
-    let event_metrics_tx = metrics_tx
-        .as_ref()
-        .filter(|_| config.observability_export_events)
-        .cloned();
-
-    let rate_metrics_tx = metrics_tx
-        .as_ref()
-        .filter(|_| config.observability_export_rate_metrics)
-        .cloned();
+    event_metrics.send(Metric::Event {
+        name: "starting",
+        reason: "",
+        reflector: None,
+    });
 
     let (mut ping_listener, mut ping_sender) = match config.measurement_type {
         MeasurementType::Icmp => (
@@ -156,8 +146,8 @@ fn main() -> anyhow::Result<()> {
         reselect_trigger: reselect_tx.clone(),
         start_time: start_t,
         stats_rx: baseliner_stats_rx,
-        baseline_metrics_tx,
-        event_metrics_tx: event_metrics_tx.clone(),
+        baseline_metrics,
+        event_metrics: event_metrics.clone(),
     };
 
     let down_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
@@ -193,7 +183,7 @@ fn main() -> anyhow::Result<()> {
                 config.measurement_type,
                 reflector_peers_lock_clone,
                 baseliner_stats_tx,
-                ping_metrics_tx,
+                ping_metrics,
             ) {
                 let _ = err_tx.send(e);
             }
@@ -230,7 +220,7 @@ fn main() -> anyhow::Result<()> {
             reflector_peers_lock: reflector_peers_lock.clone(),
             reflector_pool,
             trigger_channel: reselect_rx,
-            metrics_tx: event_metrics_tx,
+            metrics: event_metrics,
         };
         let err_tx = error_tx.clone();
         thread::Builder::new()
@@ -268,7 +258,7 @@ fn main() -> anyhow::Result<()> {
         reselect_tx,
         dl_direction,
         ul_direction,
-        rate_metrics_tx,
+        rate_metrics,
     )?;
 
     debug!(
