@@ -185,16 +185,14 @@ impl Metrics {
     }
 
     fn flush(&self, transport: &mut Transport, batch: &[Metric], host_tag: &str) {
-        let lines: Vec<String> = batch
-            .iter()
-            .map(|m| self.to_influx_line(m, host_tag))
-            .collect();
-
-        let data = lines.join("\n");
+        let mut data = String::with_capacity(batch.len() * 300);
+        for metric in batch {
+            self.write_lines(metric, host_tag, &mut data);
+        }
         transport.send(&data);
     }
 
-    pub fn to_influx_line(&self, metric: &Metric, host_tag: &str) -> String {
+    fn write_lines(&self, metric: &Metric, host_tag: &str, out: &mut String) {
         match metric {
             Metric::Ping {
                 reflector,
@@ -203,10 +201,14 @@ impl Metrics {
                 up_time,
                 down_time,
                 timestamp_ns,
-            } => format!(
-                "sqm_ping,host={host_tag},reflector={reflector},type={measurement_type} \
-                         rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}i\n"
-            ),
+            } => {
+                writeln!(
+                    out,
+                    "sqm_ping,host={host_tag},reflector={reflector},type={measurement_type} \
+                    rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}i"
+                )
+                .unwrap_or(());
+            }
             Metric::Rate {
                 dl_rate,
                 ul_rate,
@@ -215,14 +217,16 @@ impl Metrics {
                 delta_delay_down,
                 delta_delay_up,
                 timestamp_ns,
-            } => format!(
-                "sqm_rate,host={host_tag},direction=download \
-                         rate_kbps={dl:.0},load={rx_load:.4},delta_delay={delta_delay_down:.3} {timestamp_ns}i\n\
-                         sqm_rate,host={host_tag},direction=upload \
-                         rate_kbps={ul:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}i\n",
-                dl = dl_rate,
-                ul = ul_rate,
-            ),
+            } => {
+                writeln!(out,
+                    "sqm_rate,host={host_tag},direction=download \
+                    rate_kbps={dl_rate:.0},load={rx_load:.4},delta_delay={delta_delay_down:.3} {timestamp_ns}i"
+                ).unwrap_or(());
+                writeln!(out,
+                    "sqm_rate,host={host_tag},direction=upload \
+                    rate_kbps={ul_rate:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}i"
+                ).unwrap_or(());
+            }
             Metric::Baseline {
                 reflector,
                 baseline_up_ewma,
@@ -230,10 +234,16 @@ impl Metrics {
                 recent_up_ewma,
                 recent_down_ewma,
                 timestamp_ns,
-            } => format!(
-                "sqm_baseline,host={host_tag},reflector={reflector},direction=up baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}i\n
-                sqm_baseline,host={host_tag},reflector={reflector},direction=down baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}i\n"
-            ),
+            } => {
+                writeln!(out,
+                    "sqm_baseline,host={host_tag},reflector={reflector},direction=up \
+                    baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}i"
+                ).unwrap_or(());
+                writeln!(out,
+                    "sqm_baseline,host={host_tag},reflector={reflector},direction=down \
+                    baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}i"
+                ).unwrap_or(());
+            }
             Metric::Event {
                 name,
                 reason,
@@ -249,8 +259,8 @@ impl Metrics {
                 if !reason.is_empty() {
                     write!(tags, ",reason={reason}").unwrap_or(());
                 }
-                format!("sqm_event,{tags} count=1i {timestamp_ns}\n")
-            },
+                writeln!(out, "sqm_event,{tags} count=1i {timestamp_ns}").unwrap_or(());
+            }
         }
     }
 }
