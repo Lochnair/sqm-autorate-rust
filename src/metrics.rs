@@ -205,7 +205,7 @@ impl Metrics {
                 timestamp_ns,
             } => format!(
                 "sqm_ping,host={host_tag},reflector={reflector},type={measurement_type} \
-                         rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}i"
+                         rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}i\n"
             ),
             Metric::Rate {
                 dl_rate,
@@ -219,7 +219,7 @@ impl Metrics {
                 "sqm_rate,host={host_tag},direction=download \
                          rate_kbps={dl:.0},load={rx_load:.4},delta_delay={delta_delay_down:.3} {timestamp_ns}i\n\
                          sqm_rate,host={host_tag},direction=upload \
-                         rate_kbps={ul:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}i",
+                         rate_kbps={ul:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}i\n",
                 dl = dl_rate,
                 ul = ul_rate,
             ),
@@ -232,7 +232,7 @@ impl Metrics {
                 timestamp_ns,
             } => format!(
                 "sqm_baseline,host={host_tag},reflector={reflector},direction=up baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}i\n
-                sqm_baseline,host={host_tag},reflector={reflector},direction=down baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}i"
+                sqm_baseline,host={host_tag},reflector={reflector},direction=down baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}i\n"
             ),
             Metric::Event {
                 name,
@@ -249,7 +249,7 @@ impl Metrics {
                 if !reason.is_empty() {
                     write!(tags, ",reason={reason}").unwrap_or(());
                 }
-                format!("sqm_event,{tags} count=1i {timestamp_ns}")
+                format!("sqm_event,{tags} count=1i {timestamp_ns}\n")
             },
         }
     }
