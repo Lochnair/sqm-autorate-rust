@@ -3,6 +3,7 @@ extern crate core;
 mod baseliner;
 mod config;
 mod log;
+mod metrics;
 mod netlink;
 mod pinger;
 mod pinger_icmp;
