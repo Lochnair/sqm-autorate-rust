@@ -80,6 +80,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let (baseliner_stats_tx, baseliner_stats_rx) = channel();
+    let (error_tx, error_rx) = channel::<anyhow::Error>();
     let (reselect_tx, reselect_rx) = channel();
 
     let (metrics_tx, metrics_rx) = if config.observability_enabled {
@@ -88,6 +89,21 @@ fn main() -> anyhow::Result<()> {
     } else {
         (None, None)
     };
+
+    if let Some(rx) = metrics_rx {
+        let metrics = Metrics {
+            config: config.clone(),
+            metrics_rx: rx,
+        };
+        let err_tx = error_tx.clone();
+        thread::Builder::new()
+            .name("metrics".to_string())
+            .spawn(move || {
+                if let Err(e) = metrics.run() {
+                    let _ = err_tx.send(e);
+                }
+            })?;
+    }
 
     let ping_metrics_tx = metrics_tx
         .as_ref()
@@ -156,8 +172,6 @@ fn main() -> anyhow::Result<()> {
         settle_sleep_time.as_secs_f64()
     );
     sleep(settle_sleep_time);
-
-    let (error_tx, error_rx) = channel::<anyhow::Error>();
 
     let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
@@ -265,21 +279,6 @@ fn main() -> anyhow::Result<()> {
                 let _ = err_tx.send(e);
             }
         })?;
-
-    if let Some(rx) = metrics_rx {
-        let metrics = Metrics {
-            config,
-            metrics_rx: rx,
-        };
-        let err_tx = error_tx.clone();
-        thread::Builder::new()
-            .name("metrics".to_string())
-            .spawn(move || {
-                if let Err(e) = metrics.run() {
-                    let _ = err_tx.send(e);
-                }
-            })?;
-    }
 
     // Drop original sender so recv() unblocks if all threads exit cleanly
     drop(error_tx);
