@@ -14,11 +14,12 @@ mod time;
 mod util;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
+use crate::metrics::Metrics;
 use ::log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, sync_channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -81,6 +82,20 @@ fn main() -> anyhow::Result<()> {
     let (baseliner_stats_sender, baseliner_stats_receiver) = channel();
     let (reselect_sender, reselect_receiver) = channel();
 
+    let (metrics_sender, metrics_receiver) = sync_channel(1000);
+
+    let ping_tx = config
+        .observability_export_ping_metrics
+        .then(|| metrics_sender.clone());
+
+    let baseline_tx = config
+        .observability_export_baseline_metrics
+        .then(|| metrics_sender.clone());
+
+    let event_tx = config
+        .observability_export_events
+        .then(|| metrics_sender.clone());
+
     let (mut pinger_receiver, mut pinger_sender) = match config.measurement_type {
         MeasurementType::Icmp => (
             Box::new(PingerICMPEchoListener {}) as Box<dyn PingListener + Send>,
@@ -102,6 +117,7 @@ fn main() -> anyhow::Result<()> {
         reselect_trigger: reselect_sender.clone(),
         start_time: start_t,
         stats_receiver: baseliner_stats_receiver,
+        metrics_sender: metrics_sender.clone(),
     };
 
     let down_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
@@ -130,6 +146,7 @@ fn main() -> anyhow::Result<()> {
     let (error_tx, error_rx) = channel::<anyhow::Error>();
 
     let err_tx = error_tx.clone();
+    let metrics_sender_clone = metrics_sender.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
     thread::Builder::new()
         .name("receiver".to_string())
@@ -139,6 +156,7 @@ fn main() -> anyhow::Result<()> {
                 config.measurement_type,
                 reflector_peers_lock_clone,
                 baseliner_stats_sender,
+                metrics_sender_clone,
             ) {
                 let _ = err_tx.send(e);
             }
@@ -175,6 +193,7 @@ fn main() -> anyhow::Result<()> {
             reflector_peers_lock: reflector_peers_lock.clone(),
             reflector_pool,
             trigger_channel: reselect_receiver,
+            metrics_sender: metrics_sender.clone(),
         };
         let err_tx = error_tx.clone();
         thread::Builder::new()
@@ -212,6 +231,7 @@ fn main() -> anyhow::Result<()> {
         reselect_sender,
         dl_direction,
         ul_direction,
+        metrics_sender.clone(),
     )?;
 
     debug!(
@@ -229,6 +249,20 @@ fn main() -> anyhow::Result<()> {
         .name("ratecontroller".to_string())
         .spawn(move || {
             if let Err(e) = ratecontroller.run() {
+                let _ = err_tx.send(e);
+            }
+        })?;
+
+    let metrics = Metrics {
+        config,
+        metrics_receiver,
+    };
+
+    let err_tx = error_tx.clone();
+    thread::Builder::new()
+        .name("metrics".to_string())
+        .spawn(move || {
+            if let Err(e) = metrics.run() {
                 let _ = err_tx.send(e);
             }
         })?;
