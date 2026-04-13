@@ -185,11 +185,23 @@ impl Metrics {
     }
 
     fn flush(&self, transport: &mut Transport, batch: &[Metric], host_tag: &str) {
-        let mut data = String::with_capacity(batch.len() * 300);
-        for metric in batch {
-            self.write_lines(metric, host_tag, &mut data);
+        match transport {
+            Transport::Udp(_) => {
+                let mut data = String::with_capacity(300);
+                for metric in batch {
+                    data.clear();
+                    self.write_lines(metric, host_tag, &mut data);
+                    transport.send(&data);
+                }
+            }
+            Transport::Tcp { .. } => {
+                let mut data = String::with_capacity(batch.len() * 300);
+                for metric in batch {
+                    self.write_lines(metric, host_tag, &mut data);
+                }
+                transport.send(&data);
+            }
         }
-        transport.send(&data);
     }
 
     fn write_lines(&self, metric: &Metric, host_tag: &str, out: &mut String) {
