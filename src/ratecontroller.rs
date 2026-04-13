@@ -1,4 +1,4 @@
-use crate::metrics::Metric;
+use crate::metrics::{Metric, MetricsSender};
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::time::Time;
 use crate::util::{MutexExt, RwLockExt};
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::net::IpAddr;
-use std::sync::mpsc::{Sender, SyncSender};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -109,7 +109,7 @@ pub struct Ratecontroller {
     state_dl: State,
     state_ul: State,
     up_direction: StatsDirection,
-    metrics_tx: Option<SyncSender<Metric>>,
+    metrics: MetricsSender,
 }
 
 impl Ratecontroller {
@@ -248,7 +248,7 @@ impl Ratecontroller {
         reselect_trigger: Sender<bool>,
         down_direction: StatsDirection,
         up_direction: StatsDirection,
-        metrics_tx: Option<SyncSender<Metric>>,
+        metrics: MetricsSender,
     ) -> anyhow::Result<Self> {
         let dl_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
         let dl_safe_rates =
@@ -269,7 +269,7 @@ impl Ratecontroller {
             state_dl: State::new(dl_qdisc, cur_rx, dl_safe_rates),
             state_ul: State::new(ul_qdisc, cur_tx, ul_safe_rates),
             up_direction,
-            metrics_tx,
+            metrics,
         })
     }
 
@@ -409,17 +409,14 @@ impl Ratecontroller {
                     self.state_ul.current_rate as u64
                 );
 
-                if let Some(ref tx) = self.metrics_tx {
-                    let _ = tx.try_send(Metric::Rate {
-                        dl_rate: self.state_dl.current_rate,
-                        ul_rate: self.state_ul.current_rate,
-                        rx_load: self.state_dl.load,
-                        tx_load: self.state_ul.load,
-                        delta_delay_down: self.state_dl.delta_stat,
-                        delta_delay_up: self.state_ul.delta_stat,
-                        timestamp_ns: stats_time.as_nanos(),
-                    });
-                }
+                self.metrics.send(Metric::Rate {
+                    dl_rate: self.state_dl.current_rate,
+                    ul_rate: self.state_ul.current_rate,
+                    rx_load: self.state_dl.load,
+                    tx_load: self.state_ul.load,
+                    delta_delay_down: self.state_dl.delta_stat,
+                    delta_delay_up: self.state_ul.delta_stat,
+                });
 
                 if let Some(ref mut fd) = stats_fd {
                     if let Err(e) = fd.write_all(
