@@ -127,8 +127,9 @@ fn main() -> anyhow::Result<()> {
 
     let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    thread::Builder::new().name("receiver".to_string()).spawn(
-        move || {
+    thread::Builder::new()
+        .name("receiver".to_string())
+        .spawn(move || {
             if let Err(e) = pinger_receiver.listen(
                 id,
                 config.measurement_type,
@@ -137,8 +138,7 @@ fn main() -> anyhow::Result<()> {
             ) {
                 let _ = err_tx.send(e);
             }
-        },
-    )?;
+        })?;
 
     let err_tx = error_tx.clone();
     thread::Builder::new()
@@ -151,8 +151,9 @@ fn main() -> anyhow::Result<()> {
 
     let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    thread::Builder::new().name("sender".to_string()).spawn(
-        move || {
+    thread::Builder::new()
+        .name("sender".to_string())
+        .spawn(move || {
             if let Err(e) = pinger_sender.send(
                 id,
                 config.measurement_type,
@@ -161,8 +162,7 @@ fn main() -> anyhow::Result<()> {
             ) {
                 let _ = err_tx.send(e);
             }
-        },
-    )?;
+        })?;
 
     if reflector_pool_size > config.num_reflectors as usize {
         let reflector_selector = ReflectorSelector {
