@@ -15,7 +15,7 @@ pub struct ReflectorSelector {
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub reflector_pool: Vec<IpAddr>,
     pub trigger_channel: Receiver<bool>,
-    pub metrics_tx: SyncSender<Metric>,
+    pub metrics_tx: Option<SyncSender<Metric>>,
 }
 
 impl ReflectorSelector {

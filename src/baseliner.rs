@@ -25,7 +25,8 @@ pub struct Baseliner {
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
     pub stats_rx: Receiver<PingReply>,
-    pub metrics_tx: SyncSender<Metric>,
+    pub baseline_metrics_tx: Option<SyncSender<Metric>>,
+    pub event_metrics_tx: Option<SyncSender<Metric>>,
 }
 
 fn ewma_factor(tick: f64, dur: f64) -> f64 {
@@ -107,12 +108,14 @@ impl Baseliner {
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
                     time_data.reflector
                 );
-                let _ = self.metrics_tx.try_send(Metric::Event {
-                    name: "reselection",
-                    reason: "anomaly",
-                    reflector: Some(time_data.reflector),
-                    timestamp_ns: clock.as_nanos(),
-                });
+                if let Some(ref tx) = self.event_metrics_tx {
+                    let _ = tx.try_send(Metric::Event {
+                        name: "reselection",
+                        reason: "anomaly",
+                        reflector: Some(time_data.reflector),
+                        timestamp_ns: clock.as_nanos(),
+                    });
+                }
                 // If reselection is disabled this would trigger an error
                 // so just ignore the result
                 let _ = self.reselect_trigger.send(true);
@@ -136,14 +139,16 @@ impl Baseliner {
                 }
             }
 
-            let _ = self.metrics_tx.try_send(Metric::Baseline {
-                reflector: time_data.reflector,
-                baseline_up_ewma: owd_baseline.up_ewma,
-                baseline_down_ewma: owd_baseline.down_ewma,
-                recent_up_ewma: owd_recent.up_ewma,
-                recent_down_ewma: owd_recent.down_ewma,
-                timestamp_ns: clock.as_nanos(),
-            });
+            if let Some(ref tx) = self.baseline_metrics_tx {
+                let _ = tx.try_send(Metric::Baseline {
+                    reflector: time_data.reflector,
+                    baseline_up_ewma: owd_baseline.up_ewma,
+                    baseline_down_ewma: owd_baseline.down_ewma,
+                    recent_up_ewma: owd_recent.up_ewma,
+                    recent_down_ewma: owd_recent.down_ewma,
+                    timestamp_ns: clock.as_nanos(),
+                });
+            }
 
             info!(
                 "Reflector {} up baseline = {} down baseline = {}",

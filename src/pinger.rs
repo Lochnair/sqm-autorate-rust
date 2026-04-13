@@ -55,7 +55,7 @@ pub trait PingListener {
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
         stats_tx: Sender<PingReply>,
-        metrics_tx: SyncSender<Metric>,
+        ping_metrics_tx: Option<SyncSender<Metric>>,
     ) -> anyhow::Result<()> {
         let socket = &mut open_socket(type_)?;
 
@@ -84,14 +84,16 @@ pub trait PingListener {
                 }
             };
 
-            let _ = metrics_tx.try_send(Metric::Ping {
-                reflector: reply.reflector,
-                measurement_type: reply.measurement_type,
-                rtt: reply.rtt,
-                up_time: reply.up_time,
-                down_time: reply.down_time,
-                timestamp_ns: clock.as_nanos(),
-            });
+            if let Some(ref tx) = ping_metrics_tx {
+                let _ = tx.try_send(Metric::Ping {
+                    reflector: reply.reflector,
+                    measurement_type: reply.measurement_type,
+                    rtt: reply.rtt,
+                    up_time: reply.up_time,
+                    down_time: reply.down_time,
+                    timestamp_ns: clock.as_nanos(),
+                });
+            }
 
             debug!(
                 "Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  |  Originate: {:8}  |  Received time: {:8}  |  Transmit time : {:8}  |  RTT: {:8}  | UL time: {:5}  | DL time: {:5}",
