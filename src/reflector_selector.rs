@@ -1,7 +1,9 @@
 use crate::metrics::Metric;
+use crate::time::Time;
 use crate::util::{MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
+use rustix::time::ClockId;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::mpsc::{Receiver, SyncSender};
@@ -24,6 +26,7 @@ impl ReflectorSelector {
         let mut reselection_count = 0;
         let baseline_sleep_time =
             Duration::from_secs_f64(self.config.tick_interval * std::f64::consts::PI);
+        let clock = Time::new(ClockId::Realtime);
 
         // Initial wait of several seconds to allow some OWD data to build up
         sleep(baseline_sleep_time);
@@ -34,10 +37,10 @@ impl ReflectorSelector {
              * or it passes the timeout. In any case we don't care about the result of this function,
              * so we ignore the result of it.
              */
-            let _ = self
+            let triggered = self
                 .trigger_channel
                 .recv_timeout(selector_sleep_time)
-                .unwrap_or(true);
+                .is_ok();
             reselection_count += 1;
             info!("Starting reselection [#{}]", reselection_count);
 
@@ -127,7 +130,24 @@ impl ReflectorSelector {
                 );
             }
 
-            *reflectors_peers = new_peers;
+            *reflectors_peers = new_peers.clone();
+
+            if let Some(ref tx) = self.metrics_tx {
+                let _ = tx.try_send(Metric::Event {
+                    name: "reflector_selection",
+                    reason: if triggered { "triggered" } else { "timeout" },
+                    reflector: None,
+                    timestamp_ns: clock.as_nanos(),
+                });
+                for peer in &new_peers {
+                    let _ = tx.try_send(Metric::Event {
+                        name: "reflector_selected",
+                        reason: "",
+                        reflector: Some(*peer),
+                        timestamp_ns: clock.as_nanos(),
+                    });
+                }
+            }
         }
     }
 }
