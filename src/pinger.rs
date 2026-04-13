@@ -59,10 +59,9 @@ pub trait PingListener {
     ) -> anyhow::Result<()> {
         let socket = &mut open_socket(type_)?;
 
-        // We need a realtime clock when exporting metrics
-        let clock = Time::new(ClockId::Realtime);
-
         loop {
+            // Capture current time at the start of each iteration for metric timestamps
+            let clock = Time::new(ClockId::Realtime);
             let (pkt, sender) = match socket.rcv_from() {
                 Ok(val) => val,
                 Err(_) => continue,

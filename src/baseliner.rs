@@ -46,10 +46,9 @@ impl Baseliner {
         let slow_factor = ewma_factor(self.config.tick_interval, 135.0);
         let fast_factor = ewma_factor(self.config.tick_interval, 0.4);
 
-        // We need a realtime clock when exporting metrics
-        let clock = Time::new(ClockId::Realtime);
-
         loop {
+            // Capture current time at the start of each iteration for metric timestamps
+            let clock = Time::new(ClockId::Realtime);
             let time_data = self.stats_rx.recv()?;
 
             let mut owd_baseline_map = self.owd_baseline.lock_anyhow()?;

@@ -26,12 +26,12 @@ impl ReflectorSelector {
         let mut reselection_count = 0;
         let baseline_sleep_time =
             Duration::from_secs_f64(self.config.tick_interval * std::f64::consts::PI);
-        let clock = Time::new(ClockId::Realtime);
-
         // Initial wait of several seconds to allow some OWD data to build up
         sleep(baseline_sleep_time);
 
         loop {
+            // Capture current time at the start of each iteration for metric timestamps
+            let clock = Time::new(ClockId::Realtime);
             /*
              * Selection is triggered either by some other thread triggering it through the channel,
              * or it passes the timeout. In any case we don't care about the result of this function,
