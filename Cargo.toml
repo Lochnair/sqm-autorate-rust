@@ -21,7 +21,7 @@ strip = "symbols"
 [dependencies]
 anyhow = "1.0"
 icmp-socket2 = "0.4.2"
-netlink-bindings = { version = "0.2", features = ["rt-link", "tc"] }
+netlink-bindings = { version = "0.3", features = ["rt-link", "tc"] }
 netlink-socket2 = "0.3"
 fastrand = "2"
 rustix = { version = "1.1", features = ["fs", "system", "thread", "time"] }
