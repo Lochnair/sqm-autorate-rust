@@ -1,7 +1,8 @@
-use crate::SHUTDOWN;
 use crate::Config;
+use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
+use crate::util::ArcMutex;
 use crate::util::MutexExt;
 use log::info;
 use std::collections::HashMap;
@@ -20,8 +21,8 @@ pub struct ReflectorStats {
 
 pub struct Baseliner {
     pub config: Config,
-    pub owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    pub owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
+    pub owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+    pub owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
     pub stats_rx: Receiver<PingReply>,

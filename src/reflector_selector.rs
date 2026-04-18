@@ -1,6 +1,6 @@
 use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
-use crate::util::{MutexExt, RwLockExt};
+use crate::util::{ArcMutex, MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 pub struct ReflectorSelector {
     pub config: Config,
-    pub owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
+    pub owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub reflector_pool: Vec<IpAddr>,
     pub trigger_channel: Receiver<bool>,

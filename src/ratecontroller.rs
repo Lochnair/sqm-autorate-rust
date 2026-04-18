@@ -2,7 +2,7 @@ use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::netlink::{Netlink, NetlinkError, Qdisc};
 use crate::time::Time;
-use crate::util::{MutexExt, RwLockExt};
+use crate::util::{ArcMutex, ArcRwLock, MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use log::{debug, info, warn};
 use rustix::thread::ClockId;
@@ -104,9 +104,9 @@ impl State {
 pub struct Ratecontroller {
     config: Config,
     down_direction: StatsDirection,
-    owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-    reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
+    owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+    owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+    reflectors_lock: ArcRwLock<Vec<IpAddr>>,
     reselect_trigger: Sender<bool>,
     state_dl: State,
     state_ul: State,
@@ -244,9 +244,9 @@ impl Ratecontroller {
 
     pub fn new(
         config: Config,
-        owd_baseline: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-        owd_recent: Arc<Mutex<HashMap<IpAddr, ReflectorStats>>>,
-        reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
+        owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+        owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+        reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
         down_direction: StatsDirection,
         up_direction: StatsDirection,
