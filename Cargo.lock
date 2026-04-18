@@ -267,12 +267,12 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "netlink-bindings"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3707287f6171a6c70944b59089bfe0316613926df2e0d9ef28d108248709851"
+source = "git+https://github.com/one-d-wide/netlink-bindings.git?rev=3aee51e1a33b322fa2a2f706a9086941e14a008f#3aee51e1a33b322fa2a2f706a9086941e14a008f"
 
 [[package]]
 name = "netlink-socket2"
 version = "0.3.0"
+source = "git+https://github.com/one-d-wide/netlink-bindings.git?rev=3aee51e1a33b322fa2a2f706a9086941e14a008f#3aee51e1a33b322fa2a2f706a9086941e14a008f"
 dependencies = [
  "libc",
  "maybe-async",

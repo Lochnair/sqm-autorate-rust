@@ -21,8 +21,8 @@ strip = "symbols"
 [dependencies]
 anyhow = "1.0"
 icmp-socket2 = "0.4.2"
-netlink-bindings = { version = "0.3", features = ["rt-link", "tc"] }
-netlink-socket2 = "0.3"
+netlink-bindings = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "3aee51e1a33b322fa2a2f706a9086941e14a008f", features = ["rt-link", "tc"] }
+netlink-socket2 = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "3aee51e1a33b322fa2a2f706a9086941e14a008f" }
 fastrand = "2"
 rustix = { version = "1.1", features = ["fs", "system", "thread", "time"] }
 rust-uci = { version = "0.1", optional = true }
@@ -35,10 +35,3 @@ version = "0.4"
 
 [features]
 uci = ["dep:rust-uci"]
-
-[patch.crates-io]
-# netlink-socket2 0.3.0 uses struct-literal syntax for libc::msghdr/cmsghdr which
-# fails on musl (private __pad1/__pad2 fields, u32 vs usize for cmsg_len).
-# Remove this patch once a fixed version is published upstream.
-# Upstream PR: https://github.com/one-d-wide/netlink-bindings/pull/12
-netlink-socket2 = { path = "vendor/netlink-socket2" }
