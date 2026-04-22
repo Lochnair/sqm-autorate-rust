@@ -3,6 +3,7 @@ use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::util::RwLockExt;
 use flume::Sender;
+use hashlru::SyncCache;
 use icmp_socket2::socket::IcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
 use log::{debug, info, warn};
@@ -39,6 +40,15 @@ pub struct PingReply {
     pub last_receive_time_s: Instant,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct InFlightProbe {
+    pub sent_at: Instant,
+    pub originate_timestamp: i64,
+}
+
+pub type InFlightProbeKey = (IpAddr, MeasurementType, u16);
+pub type InFlightProbeCache = SyncCache<InFlightProbeKey, InFlightProbe>;
+
 fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
     match type_ {
         MeasurementType::Icmp | MeasurementType::IcmpTimestamps => IcmpSocket4::new(),
@@ -54,6 +64,7 @@ pub trait PingListener {
         id: u16,
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
+        inflight: InFlightProbeCache,
         stats_tx: Sender<PingReply>,
         ping_metrics: MetricsSender,
     ) -> anyhow::Result<()> {
@@ -128,6 +139,7 @@ pub trait PingSender {
         id: u16,
         type_: MeasurementType,
         reflectors_lock: Arc<RwLock<Vec<IpAddr>>>,
+        inflight: InFlightProbeCache,
         tick_interval: f64,
     ) -> anyhow::Result<()> {
         let mut socket = open_socket(type_)?;
@@ -172,5 +184,5 @@ pub trait PingSender {
         }
     }
 
-    fn craft_packet(&self, id: u16, seq: u16) -> icmp_socket2::packet::Icmpv4Packet;
+    fn craft_packet(&self, id: u16, seq: u16) -> (icmp_socket2::packet::Icmpv4Packet, i64);
 }

@@ -29,7 +29,7 @@ use std::{process, thread};
 
 use crate::config::{Config, MeasurementType};
 use crate::netlink::Netlink;
-use crate::pinger::{PingListener, PingSender};
+use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
