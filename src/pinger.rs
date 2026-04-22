@@ -1,15 +1,15 @@
 use crate::MeasurementType;
 use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
-use crate::util::RwLockExt;
+use crate::util::{MutexExt, RwLockExt};
 use flume::Sender;
-use hashlru::SyncCache;
 use icmp_socket2::socket::IcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
 use log::{debug, info, warn};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::{io, thread};
 use thiserror::Error;
@@ -47,7 +47,8 @@ pub struct InFlightProbe {
 }
 
 pub type InFlightProbeKey = (IpAddr, MeasurementType, u16);
-pub type InFlightProbeCache = SyncCache<InFlightProbeKey, InFlightProbe>;
+pub type InFlightProbeCache = Arc<Mutex<HashMap<InFlightProbeKey, InFlightProbe>>>;
+const INFLIGHT_PROBE_TTL: Duration = Duration::from_secs(30);
 
 fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
     match type_ {
@@ -97,13 +98,10 @@ pub trait PingListener {
             };
 
             let key = (addr, type_, reply.seq);
-            let Some(probe) = inflight.remove(&key) else {
+            let Some(probe) = inflight.lock_anyhow()?.remove(&key) else {
                 continue;
             };
             if reply.originate_timestamp != probe.originate_timestamp {
-                continue;
-            }
-            if probe.sent_at.elapsed() > Duration::from_secs(30) {
                 continue;
             }
 
@@ -174,6 +172,10 @@ pub trait PingSender {
                 continue;
             }
 
+            inflight
+                .lock_anyhow()?
+                .retain(|_, probe| probe.sent_at.elapsed() < INFLIGHT_PROBE_TTL);
+
             let sleep_duration =
                 Duration::from_millis((tick_duration_ms / reflectors.len() as u16) as u64);
 
@@ -185,25 +187,22 @@ pub trait PingSender {
 
                 let (packet, originate_timestamp) = self.craft_packet(id, seq);
                 let sent_at = Instant::now();
-                inflight.insert(
-                    (*reflector, type_, seq),
+                let key = (*reflector, type_, seq);
+                inflight.lock_anyhow()?.insert(
+                    key,
                     InFlightProbe {
                         sent_at,
                         originate_timestamp,
                     },
                 );
                 if let Err(e) = socket.send_to(addr, packet) {
-                    inflight.remove(&(*reflector, type_, seq));
+                    inflight.lock_anyhow()?.remove(&key);
                     return Err(e.into());
                 }
                 thread::sleep(sleep_duration);
             }
 
-            if seq == u16::MAX {
-                seq = 0;
-            } else {
-                seq += 1;
-            }
+            seq = seq.wrapping_add(1);
         }
     }
 

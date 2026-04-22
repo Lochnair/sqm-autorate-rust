@@ -156,12 +156,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "hashlru"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c782df656366ccb42fbbac7c7c180535a43d906a138ffb491ec3ed56a239ab"
-
-[[package]]
 name = "icmp-socket2"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -426,7 +420,6 @@ dependencies = [
  "anyhow",
  "fastrand",
  "flume",
- "hashlru",
  "icmp-socket2",
  "libc",
  "log",

@@ -195,7 +195,8 @@ fn main() -> anyhow::Result<()> {
         "In-flight probe cache capacity: {} (active_reflectors={}, reselection_enabled={}, tick_interval_s={})",
         inflight_probe_capacity, active_reflector_count, reselection_enabled, config.tick_interval
     );
-    let inflight: InFlightProbeCache = InFlightProbeCache::new(inflight_probe_capacity);
+    let inflight: InFlightProbeCache =
+        Arc::new(Mutex::new(HashMap::with_capacity(inflight_probe_capacity)));
 
     let baseliner = Baseliner {
         config: config.clone(),
