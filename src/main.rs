@@ -20,18 +20,12 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{channel, sync_channel, RecvTimeoutError};
+use std::sync::mpsc::{RecvTimeoutError, channel, sync_channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
 use std::{process, thread};
-
-pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn signal_handler(_: libc::c_int) {
-    SHUTDOWN.store(true, Ordering::Relaxed);
-}
 
 use crate::config::{Config, MeasurementType};
 use crate::netlink::Netlink;
@@ -41,14 +35,27 @@ use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSend
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
 
+pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn signal_handler(_: libc::c_int) {
+    println!("Signal received, shutting down sqm-autorate-rust");
+    SHUTDOWN.store(true, Ordering::Relaxed);
+}
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> anyhow::Result<()> {
-    println!("Starting sqm-autorate version {}", VERSION);
+    println!("Starting sqm-autorate-rust version {}", VERSION);
 
     unsafe {
-        libc::signal(libc::SIGINT, signal_handler as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, signal_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGINT,
+            signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            signal_handler as *const () as libc::sighandler_t,
+        );
     }
 
     let config = Config::new()?;
