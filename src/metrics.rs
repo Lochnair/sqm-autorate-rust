@@ -1,13 +1,13 @@
+use crate::Config;
 use crate::config::{MeasurementType, ObservabilityProtocol};
 use crate::time::Time;
-use crate::Config;
 use log::{error, info, warn};
 use rustix::time::ClockId;
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
-use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;

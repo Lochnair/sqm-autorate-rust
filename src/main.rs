@@ -134,7 +134,11 @@ fn main() -> anyhow::Result<()> {
         name: "starting",
         reason: "",
         reflector: None,
-        tags: if config.dry_run { &[("dry_run", "true")] } else { &[] },
+        tags: if config.dry_run {
+            &[("dry_run", "true")]
+        } else {
+            &[]
+        },
     });
 
     let (mut ping_listener, mut ping_sender) = match config.measurement_type {
@@ -331,7 +335,11 @@ fn main() -> anyhow::Result<()> {
         "Restoring base shaper rates (D/L): {} / {}",
         config.download_base_kbits, config.upload_base_kbits
     );
-    let _ = Netlink::set_qdisc_rate(down_qdisc, config.download_base_kbits as u64, config.dry_run);
+    let _ = Netlink::set_qdisc_rate(
+        down_qdisc,
+        config.download_base_kbits as u64,
+        config.dry_run,
+    );
     let _ = Netlink::set_qdisc_rate(up_qdisc, config.upload_base_kbits as u64, config.dry_run);
 
     result

@@ -1,5 +1,5 @@
-use crate::SHUTDOWN;
 use crate::MeasurementType;
+use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::util::RwLockExt;
 use icmp_socket2::socket::IcmpSocket;
