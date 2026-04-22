@@ -25,7 +25,7 @@ netlink-bindings = { git = "https://github.com/one-d-wide/netlink-bindings.git",
 netlink-socket2 = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "3aee51e1a33b322fa2a2f706a9086941e14a008f" }
 fastrand = "2"
 rustix = { version = "1.1", features = ["fs", "system", "thread", "time"] }
-rust-uci = { git = "https://github.com/nickelc/rust-uci", rev = "71ea7864ae5d266100043bfd2f682d4302a5b3fc", optional = true }
+rust-uci = { git = "https://github.com/namib-project/rust-uci.git", rev = "71ea7864ae5d266100043bfd2f682d4302a5b3fc", optional = true }
 thiserror = "2.0"
 libc = "0.2"
 
