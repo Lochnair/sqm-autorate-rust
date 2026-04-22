@@ -72,8 +72,12 @@ impl PingListener for PingerICMPTimestampListener {
 }
 
 impl PingSender for PingerICMPTimestampSender {
-    fn craft_packet(&self, id: u16, seq: u16) -> Icmpv4Packet {
+    fn craft_packet(&self, id: u16, seq: u16) -> (Icmpv4Packet, i64) {
         let time_since_midnight = Time::new(ClockId::Realtime).get_time_since_midnight();
-        Icmpv4Packet::with_timestamp_request(id, seq, time_since_midnight as u32, 0, 0).unwrap()
+        (
+            Icmpv4Packet::with_timestamp_request(id, seq, time_since_midnight as u32, 0, 0)
+                .unwrap(),
+            time_since_midnight as i64,
+        )
     }
 }

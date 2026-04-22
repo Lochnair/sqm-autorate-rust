@@ -77,11 +77,14 @@ impl PingListener for PingerICMPEchoListener {
 }
 
 impl PingSender for PingerICMPEchoSender {
-    fn craft_packet(&self, id: u16, seq: u16) -> Icmpv4Packet {
+    fn craft_packet(&self, id: u16, seq: u16) -> (Icmpv4Packet, i64) {
         let clock = Time::new(ClockId::Monotonic);
         let time_ms = clock.to_milliseconds();
         let payload = time_ms.to_be_bytes().to_vec();
 
-        Icmpv4Packet::with_echo_request(id, seq, payload).unwrap()
+        (
+            Icmpv4Packet::with_echo_request(id, seq, payload).unwrap(),
+            time_ms as i64,
+        )
     }
 }
