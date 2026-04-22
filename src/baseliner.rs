@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Copy, Clone)]

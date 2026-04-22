@@ -12,7 +12,6 @@ use std::io::Write;
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use thiserror::Error;
