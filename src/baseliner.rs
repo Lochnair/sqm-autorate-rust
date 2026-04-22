@@ -4,11 +4,11 @@ use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
 use crate::util::ArcMutex;
 use crate::util::MutexExt;
+use flume::{Receiver, Sender};
 use log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
 
 #[derive(Copy, Clone)]

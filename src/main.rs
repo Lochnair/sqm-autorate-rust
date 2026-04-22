@@ -16,11 +16,11 @@ mod util;
 use crate::baseliner::{Baseliner, ReflectorStats};
 use crate::metrics::{Metric, Metrics, MetricsSender};
 use ::log::{debug, info};
+use flume::RecvTimeoutError;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, channel, sync_channel};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -98,14 +98,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let (baseliner_stats_tx, baseliner_stats_rx) = channel();
-    let (error_tx, error_rx) = channel::<anyhow::Error>();
-    let (reselect_tx, reselect_rx) = channel();
+    let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
+    let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
+    let (reselect_tx, reselect_rx) = flume::unbounded();
 
     let dropped = Arc::new(AtomicU32::new(0));
 
     let (metrics_tx, metrics_thread_handle) = if config.observability_enabled {
-        let (tx, rx) = sync_channel(1000);
+        let (tx, rx) = flume::bounded(1000);
         let metrics = Metrics {
             config: config.clone(),
             metrics_rx: rx,
