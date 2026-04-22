@@ -43,6 +43,32 @@ extern "C" fn signal_handler(_: libc::c_int) {
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const RESELECTION_CANDIDATE_BURST: usize = 20;
+const INFLIGHT_CAPACITY_DUPLICATE_FACTOR: usize = 2;
+const INFLIGHT_CAPACITY_MIN: usize = 256;
+
+fn compute_inflight_probe_capacity(
+    config: &Config,
+    active_reflector_count: usize,
+    reselection_enabled: bool,
+) -> usize {
+    let tick_interval_ms = (config.tick_interval * 1000.0).max(1.0);
+    let expected_path_delay_ms = (config.download_delay_ms + config.upload_delay_ms).max(10.0);
+    // Keep enough room for severe queueing events while still adapting to configured delay budgets.
+    let max_rtt_ms = (expected_path_delay_ms * 20.0).clamp(1000.0, 10000.0);
+
+    let burst_reflector_count = if reselection_enabled {
+        active_reflector_count + RESELECTION_CANDIDATE_BURST
+    } else {
+        active_reflector_count
+    };
+    let probes_per_reflector = (max_rtt_ms / tick_interval_ms).ceil() as usize;
+
+    (burst_reflector_count
+        .saturating_mul(probes_per_reflector)
+        .saturating_mul(INFLIGHT_CAPACITY_DUPLICATE_FACTOR))
+    .max(INFLIGHT_CAPACITY_MIN)
+}
 
 fn main() -> anyhow::Result<()> {
     println!("Starting sqm-autorate-rust version {}", VERSION);
@@ -161,6 +187,15 @@ fn main() -> anyhow::Result<()> {
             todo!()
         }
     };
+    let reselection_enabled = reflector_pool_size > config.num_reflectors as usize;
+    let active_reflector_count = default_reflectors.len().max(config.num_reflectors as usize);
+    let inflight_probe_capacity =
+        compute_inflight_probe_capacity(&config, active_reflector_count, reselection_enabled);
+    info!(
+        "In-flight probe cache capacity: {} (active_reflectors={}, reselection_enabled={}, tick_interval_s={})",
+        inflight_probe_capacity, active_reflector_count, reselection_enabled, config.tick_interval
+    );
+    let inflight: InFlightProbeCache = InFlightProbeCache::new(inflight_probe_capacity);
 
     let baseliner = Baseliner {
         config: config.clone(),
@@ -198,6 +233,7 @@ fn main() -> anyhow::Result<()> {
 
     let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
+    let inflight_listener = inflight.clone();
     thread::Builder::new()
         .name("receiver".to_string())
         .spawn(move || {
@@ -205,6 +241,7 @@ fn main() -> anyhow::Result<()> {
                 id,
                 config.measurement_type,
                 reflector_peers_lock_clone,
+                inflight_listener,
                 baseliner_stats_tx,
                 ping_metrics,
             ) {
@@ -223,6 +260,7 @@ fn main() -> anyhow::Result<()> {
 
     let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
+    let inflight_sender = inflight.clone();
     thread::Builder::new()
         .name("sender".to_string())
         .spawn(move || {
@@ -230,6 +268,7 @@ fn main() -> anyhow::Result<()> {
                 id,
                 config.measurement_type,
                 reflector_peers_lock_clone,
+                inflight_sender,
                 config.tick_interval,
             ) {
                 let _ = err_tx.send(e);
@@ -238,7 +277,7 @@ fn main() -> anyhow::Result<()> {
 
     let main_event_metrics = event_metrics.clone();
 
-    if reflector_pool_size > config.num_reflectors as usize {
+    if reselection_enabled {
         let reflector_selector = ReflectorSelector {
             config: config.clone(),
             owd_recent: owd_recent.clone(),
