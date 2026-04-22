@@ -55,7 +55,7 @@ impl From<FlexiBool> for bool {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MeasurementType {
     Icmp = 1,
     IcmpTimestamps,
