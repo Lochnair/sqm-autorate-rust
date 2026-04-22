@@ -35,6 +35,26 @@ where
     Ok(io::BufReader::new(file).lines())
 }
 
+struct FlexiBool(bool);
+
+impl FromStr for FlexiBool {
+    type Err = ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "y" | "on" | "enabled" => Ok(FlexiBool(true)),
+            "0" | "false" | "no" | "n" | "off" | "disabled" => Ok(FlexiBool(false)),
+            _ => Err(ConfigError::ParseError(s.to_string())),
+        }
+    }
+}
+
+impl From<FlexiBool> for bool {
+    fn from(f: FlexiBool) -> bool {
+        f.0
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum MeasurementType {
     Icmp = 1,
