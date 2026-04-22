@@ -352,13 +352,11 @@ impl Config {
         }
     }
 
-    fn get_host_tag() -> String {
-        if let Ok(val) = env::var("SQMA_OBSERVABILITY_HOST_TAG") {
-            if !val.is_empty() {
-                return val;
-            }
-        }
+    fn get_bool(env_key: &str, uci_key: &str, default: Option<bool>) -> Result<bool, ConfigError> {
+        Self::get::<FlexiBool>(env_key, uci_key, default.map(FlexiBool)).map(|f| f.0)
+    }
 
+    fn get_host_tag() -> String {
         // rustix can give us the hostname without shelling out
         rustix::system::uname()
             .nodename()
