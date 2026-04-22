@@ -4,7 +4,7 @@ use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
 use crate::util::ArcMutex;
 use crate::util::MutexExt;
-use log::info;
+use log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
@@ -147,11 +147,11 @@ impl Baseliner {
                 recent_down_ewma: owd_recent.down_ewma,
             });
 
-            info!(
+            debug!(
                 "Reflector {} up baseline = {} down baseline = {}",
                 time_data.reflector, owd_baseline.up_ewma, owd_baseline.down_ewma
             );
-            info!(
+            debug!(
                 "Reflector {} up recent = {} down recent = {}",
                 time_data.reflector, owd_recent.up_ewma, owd_recent.down_ewma
             );

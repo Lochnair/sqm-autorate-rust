@@ -235,7 +235,11 @@ impl Ratecontroller {
 
         if state_dl.deltas.len() < 5 || state_ul.deltas.len() < 5 {
             // trigger reselection
-            warn!("Not enough delta values, triggering reselection");
+            warn!(
+                "Not enough delta values (D: {}, U: {}, need 5), triggering reselection",
+                state_dl.deltas.len(),
+                state_ul.deltas.len()
+            );
             let _ = self.reselect_trigger.send(true);
         }
 
@@ -390,8 +394,8 @@ impl Ratecontroller {
                     || self.state_ul.next_rate != self.state_ul.current_rate
                 {
                     info!(
-                        "self.state_ul.next_rate {} self.state_dl.next_rate {}",
-                        self.state_ul.next_rate, self.state_dl.next_rate
+                        "Adjusting rates (D/U): {} / {} kbit/s",
+                        self.state_dl.next_rate as u64, self.state_ul.next_rate as u64
                     );
                 }
 

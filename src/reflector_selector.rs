@@ -62,7 +62,7 @@ impl ReflectorSelector {
 
             // Include all current peers
             for reflector in reflectors_peers.iter() {
-                debug!("Current peer: {}", reflector.to_string());
+                debug!("Current peer: {}", reflector);
                 next_peers.push(*reflector);
             }
 
@@ -72,7 +72,7 @@ impl ReflectorSelector {
                 if next_peers.contains(next_candidate) {
                     continue;
                 }
-                debug!("Next candidate: {}", next_candidate.to_string());
+                debug!("Next candidate: {}", next_candidate);
                 next_peers.push(*next_candidate);
             }
 
@@ -98,11 +98,11 @@ impl ReflectorSelector {
                 if owd_recent.contains_key(&peer) {
                     let rtt = (owd_recent[&peer].down_ewma + owd_recent[&peer].up_ewma) as u64;
                     candidates.push((peer, rtt));
-                    info!("Candidate reflector: {} RTT: {}", peer.to_string(), rtt);
+                    info!("Candidate reflector: {} RTT: {}", peer, rtt);
                 } else {
                     info!(
                         "No data found from candidate reflector: {} - skipping",
-                        peer.to_string()
+                        peer
                     );
                 }
             }
