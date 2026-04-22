@@ -96,6 +96,17 @@ pub trait PingListener {
                 }
             };
 
+            let key = (addr, type_, reply.seq);
+            let Some(probe) = inflight.remove(&key) else {
+                continue;
+            };
+            if reply.originate_timestamp != probe.originate_timestamp {
+                continue;
+            }
+            if probe.sent_at.elapsed() > Duration::from_secs(30) {
+                continue;
+            }
+
             ping_metrics.send(Metric::Ping {
                 reflector: reply.reflector,
                 measurement_type: reply.measurement_type,
@@ -172,7 +183,19 @@ pub trait PingSender {
                     IpAddr::V6(_) => unimplemented!(),
                 };
 
-                socket.send_to(addr, self.craft_packet(id, seq))?;
+                let (packet, originate_timestamp) = self.craft_packet(id, seq);
+                let sent_at = Instant::now();
+                inflight.insert(
+                    (*reflector, type_, seq),
+                    InFlightProbe {
+                        sent_at,
+                        originate_timestamp,
+                    },
+                );
+                if let Err(e) = socket.send_to(addr, packet) {
+                    inflight.remove(&(*reflector, type_, seq));
+                    return Err(e.into());
+                }
                 thread::sleep(sleep_duration);
             }
 
