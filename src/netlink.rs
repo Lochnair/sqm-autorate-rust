@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2022-Present Nils Andreas Svee mailto:contact@lochnair.net (github @Lochnair)
+//
+// SPDX-License-Identifier: MPL-2.0
+
 use std::io;
 use std::str::Utf8Error;
 

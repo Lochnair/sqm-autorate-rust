@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2022-Present Nils Andreas Svee mailto:contact@lochnair.net (github @Lochnair)
+//
+// SPDX-License-Identifier: MPL-2.0
+
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
 use rustix::thread::ClockId;
 

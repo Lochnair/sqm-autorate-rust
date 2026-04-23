@@ -1,3 +1,10 @@
+// SPDX-FileCopyrightText: 2022-Present Charles Corrigan mailto:chas-iot@runegate.org (github @chas-iot)
+// SPDX-FileCopyrightText: 2022-Present Daniel Lakeland mailto:dlakelan@street-artists.org (github @dlakelan)
+// SPDX-FileCopyrightText: 2022-Present Mark Baker mailto:mark@vpost.net (github @Fail-Safe)
+// SPDX-FileCopyrightText: 2022-Present Nils Andreas Svee mailto:contact@lochnair.net (github @Lochnair)
+//
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::config::MeasurementType;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::time::Time;

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2022-Present Nils Andreas Svee mailto:contact@lochnair.net (github @Lochnair)
+//
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::Config;
 use crate::config::{MeasurementType, ObservabilityProtocol};
 use crate::time::Time;

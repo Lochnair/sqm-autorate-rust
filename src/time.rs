@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2022-Present Nils Andreas Svee mailto:contact@lochnair.net (github @Lochnair)
+//
+// SPDX-License-Identifier: MPL-2.0
+
 use rustix::fs::Timespec;
 use rustix::thread::ClockId;
 use rustix::time::clock_gettime;
