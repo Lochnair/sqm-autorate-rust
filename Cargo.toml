@@ -22,7 +22,7 @@ strip = "symbols"
 anyhow = "1.0"
 icmp-socket2 = "0.4.2"
 netlink-bindings = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "3aee51e1a33b322fa2a2f706a9086941e14a008f", features = ["rt-link", "tc"] }
-netlink-socket2 = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "3aee51e1a33b322fa2a2f706a9086941e14a008f" }
+netlink-socket2 = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "0b609e9380610e7da73f8c43cdf804a1d1bf5474" }
 fastrand = "2"
 rustix = { version = "1.1", features = ["fs", "system", "thread", "time"] }
 rust-uci = { git = "https://github.com/namib-project/rust-uci.git", rev = "71ea7864ae5d266100043bfd2f682d4302a5b3fc", optional = true }
