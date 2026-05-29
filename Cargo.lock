@@ -264,12 +264,12 @@ source = "git+https://github.com/one-d-wide/netlink-bindings.git?rev=0b609e93806
 
 [[package]]
 name = "netlink-socket2"
-version = "0.3.0"
-source = "git+https://github.com/one-d-wide/netlink-bindings.git?rev=3aee51e1a33b322fa2a2f706a9086941e14a008f#3aee51e1a33b322fa2a2f706a9086941e14a008f"
+version = "0.3.1"
+source = "git+https://github.com/one-d-wide/netlink-bindings.git?rev=0b609e9380610e7da73f8c43cdf804a1d1bf5474#0b609e9380610e7da73f8c43cdf804a1d1bf5474"
 dependencies = [
  "libc",
  "maybe-async",
- "netlink-bindings 0.3.0",
+ "netlink-bindings 0.3.1",
 ]
 
 [[package]]
