@@ -85,19 +85,17 @@ impl Netlink {
         while let Some(reply) = iter.recv() {
             let (header, attrs) = reply?;
 
-            if header.ifindex == ifindex {
-                if let Ok(kind) = attrs.get_kind() {
-                    if kind
-                        .to_str()
-                        .map_err(|_| NetlinkError::NlQdiscError("Invalid UTF-8".to_string()))?
-                        == "cake"
-                    {
-                        return Ok(Qdisc {
-                            ifindex,
-                            parent: header.parent,
-                        });
-                    }
-                }
+            if header.ifindex == ifindex
+                && let Ok(kind) = attrs.get_kind()
+                && kind
+                    .to_str()
+                    .map_err(|_| NetlinkError::NlQdiscError("Invalid UTF-8".to_string()))?
+                    == "cake"
+            {
+                return Ok(Qdisc {
+                    ifindex,
+                    parent: header.parent,
+                });
             }
         }
 

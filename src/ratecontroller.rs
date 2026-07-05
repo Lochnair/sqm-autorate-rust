@@ -446,8 +446,8 @@ impl Ratecontroller {
                     delta_delay_up: self.state_ul.delta_stat,
                 });
 
-                if let Some(ref mut fd) = stats_fd {
-                    if let Err(e) = fd.write_all(
+                let stats_write_error = stats_fd.as_mut().and_then(|fd| {
+                    fd.write_all(
                         format!(
                             "{},{},{},{},{},{},{},{}\n",
                             stats_time.secs(),
@@ -460,34 +460,36 @@ impl Ratecontroller {
                             self.state_ul.current_rate as u64
                         )
                         .as_bytes(),
-                    ) {
-                        warn!("Failed to write statistics: {}", e);
-                    }
+                    )
+                    .err()
+                });
+                if let Some(e) = stats_write_error {
+                    warn!("Failed to write statistics: {}", e);
                 }
 
                 lastchg_t = now_t;
             }
 
-            if let Some(ref mut fd) = speed_hist_fd {
-                if now_t.duration_since(lastdump_t).as_secs_f64() > 300.0 {
-                    for i in 0..self.config.speed_hist_size as usize {
-                        let hist_time = Time::new(ClockId::Realtime);
-                        if let Err(e) = fd.write_all(
-                            format!(
-                                "{},{},{},{}\n",
-                                hist_time.as_secs_f64(),
-                                i,
-                                self.state_ul.safe_rates[i],
-                                self.state_dl.safe_rates[i]
-                            )
-                            .as_bytes(),
-                        ) {
-                            warn!("Failed to write speed history file: {}", e);
-                        }
+            if let Some(ref mut fd) = speed_hist_fd
+                && now_t.duration_since(lastdump_t).as_secs_f64() > 300.0
+            {
+                for i in 0..self.config.speed_hist_size as usize {
+                    let hist_time = Time::new(ClockId::Realtime);
+                    if let Err(e) = fd.write_all(
+                        format!(
+                            "{},{},{},{}\n",
+                            hist_time.as_secs_f64(),
+                            i,
+                            self.state_ul.safe_rates[i],
+                            self.state_dl.safe_rates[i]
+                        )
+                        .as_bytes(),
+                    ) {
+                        warn!("Failed to write speed history file: {}", e);
                     }
-
-                    lastdump_t = now_t;
                 }
+
+                lastdump_t = now_t;
             }
         }
     }

@@ -78,12 +78,13 @@ impl Transport {
 
                 let full_data = format!("{}\n", data);
                 // take the stream out, write, put it back or set None on failure
-                if let Some(s) = stream {
-                    if let Err(e) = std::io::Write::write_all(s, full_data.as_bytes()) {
-                        warn!("TCP send failed: {}", e);
-                        *stream = None;
-                        *reconnect_backoff = (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
-                    }
+                let write_error = stream
+                    .as_mut()
+                    .and_then(|s| std::io::Write::write_all(s, full_data.as_bytes()).err());
+                if let Some(e) = write_error {
+                    warn!("TCP send failed: {}", e);
+                    *stream = None;
+                    *reconnect_backoff = (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
                 }
             }
         }
@@ -209,11 +210,8 @@ impl Metrics {
             }
 
             // greedily drain without blocking
-            loop {
-                match self.metrics_rx.try_recv() {
-                    Ok(metric) => batch.push(metric),
-                    Err(_) => break,
-                }
+            while let Ok(metric) = self.metrics_rx.try_recv() {
+                batch.push(metric);
                 if batch.len() >= batch_size {
                     break;
                 }
