@@ -240,24 +240,6 @@ fn main() -> anyhow::Result<()> {
     sleep(settle_sleep_time);
 
     let err_tx = error_tx.clone();
-    let reflector_peers_lock_clone = reflector_peers_lock.clone();
-    let inflight_listener = inflight.clone();
-    thread::Builder::new()
-        .name("receiver".to_string())
-        .spawn(move || {
-            if let Err(e) = ping_listener.listen(
-                id,
-                config.measurement_type,
-                reflector_peers_lock_clone,
-                inflight_listener,
-                baseliner_stats_tx,
-                ping_metrics,
-            ) {
-                let _ = err_tx.send(e);
-            }
-        })?;
-
-    let err_tx = error_tx.clone();
     thread::Builder::new()
         .name("baseliner".to_string())
         .spawn(move || {
@@ -268,17 +250,34 @@ fn main() -> anyhow::Result<()> {
 
     let err_tx = error_tx.clone();
     let reflector_peers_lock_clone = reflector_peers_lock.clone();
+    let inflight_listener = inflight.clone();
     let inflight_sender = inflight.clone();
+    let measurement_type = config.measurement_type;
+    let tick_interval = config.tick_interval;
     thread::Builder::new()
-        .name("sender".to_string())
+        .name("pinger".to_string())
         .spawn(move || {
-            if let Err(e) = ping_sender.send(
-                id,
-                config.measurement_type,
-                reflector_peers_lock_clone,
-                inflight_sender,
-                config.tick_interval,
-            ) {
+            let result = smol::block_on(async {
+                let listener = ping_listener.listen(
+                    id,
+                    measurement_type,
+                    reflector_peers_lock_clone.clone(),
+                    inflight_listener,
+                    baseliner_stats_tx,
+                    ping_metrics,
+                );
+                let sender = ping_sender.send(
+                    id,
+                    measurement_type,
+                    reflector_peers_lock_clone,
+                    inflight_sender,
+                    tick_interval,
+                );
+
+                // Returning from the race drops the sibling future, so neither task is detached.
+                smol::future::race(listener, sender).await
+            });
+            if let Err(e) = result {
                 let _ = err_tx.send(e);
             }
         })?;

@@ -10,15 +10,15 @@ use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::util::{MutexExt, RwLockExt};
 use flume::Sender;
-use icmp_socket2::socket::IcmpSocket;
+use icmp_socket2::smol::AsyncIcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
 use log::{debug, info, warn};
 use std::collections::HashMap;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use std::{io, thread};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -66,8 +66,9 @@ fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
     }
 }
 
+#[async_trait::async_trait]
 pub trait PingListener {
-    fn listen(
+    async fn listen(
         &mut self,
         id: u16,
         type_: MeasurementType,
@@ -76,21 +77,22 @@ pub trait PingListener {
         stats_tx: Sender<PingReply>,
         ping_metrics: MetricsSender,
     ) -> anyhow::Result<()> {
-        let socket = &mut open_socket(type_)?;
+        let socket = &mut open_socket(type_)?.into_async()?;
+        socket.set_timeout(Some(Duration::from_millis(250)));
 
         loop {
             if SHUTDOWN.load(Ordering::Relaxed) {
                 info!("Ping listener shutting down");
                 return Ok(());
             }
-            let (pkt, sender) = match socket.rcv_from() {
+            let (pkt, sender) = match socket.rcv_from().await {
                 Ok(val) => val,
                 Err(_) => continue,
             };
 
             let addr: IpAddr = sender.as_socket().unwrap().ip();
 
-            let reflectors = reflectors_lock.read_anyhow()?;
+            let reflectors = reflectors_lock.read_anyhow()?.clone();
             if !reflectors.contains(&addr) {
                 continue;
             }
@@ -149,8 +151,9 @@ pub trait PingListener {
     ) -> Result<PingReply, PingError>;
 }
 
+#[async_trait::async_trait]
 pub trait PingSender {
-    fn send(
+    async fn send(
         &mut self,
         id: u16,
         type_: MeasurementType,
@@ -158,10 +161,10 @@ pub trait PingSender {
         inflight: InFlightProbeCache,
         tick_interval: f64,
     ) -> anyhow::Result<()> {
-        let mut socket = open_socket(type_)?;
+        let mut socket = open_socket(type_)?.into_async()?;
 
         let mut seq: u16 = 0;
-        let tick_duration_ms: u16 = (tick_interval * 1000.0) as u16;
+        let tick_duration = Duration::from_millis((tick_interval * 1000.0) as u64);
 
         loop {
             if SHUTDOWN.load(Ordering::Relaxed) {
@@ -170,12 +173,10 @@ pub trait PingSender {
             }
             // Clone the reflectors vec and drop the read lock immediately —
             // holding it for the entire tick would starve the reflector selector's write lock.
-            let reflectors_unlocked = reflectors_lock.read_anyhow()?;
-            let reflectors = reflectors_unlocked.clone();
-            drop(reflectors_unlocked);
+            let reflectors = { reflectors_lock.read_anyhow()?.clone() };
 
             if reflectors.is_empty() {
-                thread::sleep(Duration::from_millis(tick_duration_ms as u64));
+                smol::Timer::after(tick_duration).await;
                 continue;
             }
 
@@ -183,8 +184,7 @@ pub trait PingSender {
                 .lock_anyhow()?
                 .retain(|_, probe| probe.sent_at.elapsed() < INFLIGHT_PROBE_TTL);
 
-            let sleep_duration =
-                Duration::from_millis((tick_duration_ms / reflectors.len() as u16) as u64);
+            let sleep_duration = tick_duration / reflectors.len() as u32;
 
             for reflector in reflectors.iter() {
                 let addr: Ipv4Addr = match reflector {
@@ -202,11 +202,11 @@ pub trait PingSender {
                         originate_timestamp,
                     },
                 );
-                if let Err(e) = socket.send_to(addr, packet) {
+                if let Err(e) = socket.send_to(addr, packet).await {
                     inflight.lock_anyhow()?.remove(&key);
                     return Err(e.into());
                 }
-                thread::sleep(sleep_duration);
+                smol::Timer::after(sleep_duration).await;
             }
 
             seq = seq.wrapping_add(1);
