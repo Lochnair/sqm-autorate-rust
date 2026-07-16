@@ -7,9 +7,9 @@
 
 use anyhow::Result;
 use log::Level;
-#[cfg(feature = "uci")]
+#[cfg(all(target_os = "linux", feature = "uci"))]
 use log::warn;
-#[cfg(feature = "uci")]
+#[cfg(all(target_os = "linux", feature = "uci"))]
 use rust_uci::Uci;
 use std::fmt;
 use std::fmt::Display;
@@ -391,7 +391,7 @@ impl Config {
         None
     }
 
-    #[cfg(feature = "uci")]
+    #[cfg(all(target_os = "linux", feature = "uci"))]
     fn get_from_uci(key: &str) -> Option<String> {
         let mut uci = match Uci::new() {
             Ok(val) => val,
@@ -410,7 +410,7 @@ impl Config {
         };
     }
 
-    #[cfg(not(feature = "uci"))]
+    #[cfg(not(all(target_os = "linux", feature = "uci")))]
     fn get_from_uci(_: &str) -> Option<String> {
         None
     }
