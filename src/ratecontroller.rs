@@ -7,13 +7,16 @@
 
 use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
-use crate::netlink::{Netlink, NetlinkError, Qdisc};
+use crate::platform::{
+    InterfaceStatsProvider, PlatformInterfaceStats, PlatformTrafficControl, TrafficControlBackend,
+    interface_stats_provider, traffic_control_backend,
+};
 use crate::time::Time;
 use crate::util::{ArcMutex, ArcRwLock, MutexExt, RwLockExt};
 use crate::{Config, ReflectorStats};
 use flume::Sender;
 use log::{debug, info, warn};
-use rustix::thread::ClockId;
+use rustix::time::ClockId;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -21,18 +24,11 @@ use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Direction {
     Down,
     Up,
-}
-
-#[derive(Debug, Error)]
-pub enum RatecontrolError {
-    #[error("Netlink error")]
-    Netlink(#[from] NetlinkError),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -51,34 +47,36 @@ fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
     rates
 }
 
-fn get_interface_stats(
-    config: &Config,
+fn get_interface_stats<S: InterfaceStatsProvider>(
+    stats_provider: &mut S,
+    download_interface: &str,
+    upload_interface: &str,
     down_direction: StatsDirection,
     up_direction: StatsDirection,
-) -> Result<(i128, i128), RatecontrolError> {
-    let (down_rx, down_tx) = Netlink::get_interface_stats(config.download_interface.as_str())?;
-    let (up_rx, up_tx) = Netlink::get_interface_stats(config.upload_interface.as_str())?;
+) -> Result<(i128, i128), S::Error> {
+    let down = stats_provider.read_stats(download_interface)?;
+    let up = stats_provider.read_stats(upload_interface)?;
 
     let rx_bytes = match down_direction {
-        StatsDirection::RX => down_rx,
-        StatsDirection::TX => down_tx,
+        StatsDirection::RX => down.rx_bytes,
+        StatsDirection::TX => down.tx_bytes,
     };
 
     let tx_bytes = match up_direction {
-        StatsDirection::RX => up_rx,
-        StatsDirection::TX => up_tx,
+        StatsDirection::RX => up.rx_bytes,
+        StatsDirection::TX => up.tx_bytes,
     };
 
     Ok((rx_bytes.into(), tx_bytes.into()))
 }
 
 #[derive(Clone, Debug)]
-struct State {
+struct State<H> {
     current_bytes: i128,
     current_rate: f64,
     delta_stat: f64,
     deltas: Vec<f64>,
-    qdisc: Qdisc,
+    shaper: H,
     load: f64,
     next_rate: f64,
     nrate: usize,
@@ -88,8 +86,8 @@ struct State {
     utilisation: f64,
 }
 
-impl State {
-    fn new(qdisc: Qdisc, previous_bytes: i128, safe_rates: Vec<f64>) -> Self {
+impl<H> State<H> {
+    fn new(shaper: H, previous_bytes: i128, safe_rates: Vec<f64>) -> Self {
         State {
             current_bytes: 0,
             current_rate: 0.0,
@@ -98,7 +96,7 @@ impl State {
             load: 0.0,
             next_rate: 0.0,
             nrate: 0,
-            qdisc,
+            shaper,
             previous_bytes,
             prev_t: Instant::now(),
             safe_rates,
@@ -107,20 +105,84 @@ impl State {
     }
 }
 
-pub struct Ratecontroller {
+pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
     config: Config,
     down_direction: StatsDirection,
     owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
     owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
     reflectors_lock: ArcRwLock<Vec<IpAddr>>,
     reselect_trigger: Sender<bool>,
-    state_dl: State,
-    state_ul: State,
+    state_dl: State<T::Handle>,
+    state_ul: State<T::Handle>,
+    stats_provider: S,
+    traffic_control: T,
     up_direction: StatsDirection,
     metrics: MetricsSender,
 }
 
-impl Ratecontroller {
+impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
+    fn new_with_backends(
+        config: Config,
+        owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+        owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+        reflectors_lock: ArcRwLock<Vec<IpAddr>>,
+        reselect_trigger: Sender<bool>,
+        down_direction: StatsDirection,
+        up_direction: StatsDirection,
+        metrics: MetricsSender,
+        mut stats_provider: S,
+        mut traffic_control: T,
+    ) -> anyhow::Result<Self> {
+        let dl_shaper = traffic_control.find_shaper(config.download_interface.as_str())?;
+        let dl_safe_rates =
+            generate_initial_speeds(config.download_base_kbits, config.speed_hist_size);
+        let ul_shaper = traffic_control.find_shaper(config.upload_interface.as_str())?;
+        let ul_safe_rates =
+            generate_initial_speeds(config.upload_base_kbits, config.speed_hist_size);
+
+        let (cur_rx, cur_tx) = get_interface_stats(
+            &mut stats_provider,
+            &config.download_interface,
+            &config.upload_interface,
+            down_direction,
+            up_direction,
+        )?;
+
+        Ok(Self {
+            config,
+            down_direction,
+            owd_baseline,
+            owd_recent,
+            reflectors_lock,
+            reselect_trigger,
+            state_dl: State::new(dl_shaper, cur_rx, dl_safe_rates),
+            state_ul: State::new(ul_shaper, cur_tx, ul_safe_rates),
+            stats_provider,
+            traffic_control,
+            up_direction,
+            metrics,
+        })
+    }
+
+    fn request_initial_rates(&mut self) -> anyhow::Result<()> {
+        // Set rates to 60% of base rate to make sure we start with sane baselines.
+        self.state_dl.current_rate = self.config.download_base_kbits * 0.6;
+        self.state_ul.current_rate = self.config.upload_base_kbits * 0.6;
+
+        self.traffic_control.set_rate(
+            &self.state_dl.shaper,
+            self.state_dl.current_rate.round() as u64,
+            self.config.dry_run,
+        )?;
+        self.traffic_control.set_rate(
+            &self.state_ul.shaper,
+            self.state_ul.current_rate.round() as u64,
+            self.config.dry_run,
+        )?;
+
+        Ok(())
+    }
+
     fn calculate_rate(&mut self, direction: Direction) -> anyhow::Result<()> {
         let (base_rate, delay_ms, min_rate, state) = if direction == Direction::Down {
             (
@@ -251,7 +313,9 @@ impl Ratecontroller {
 
         Ok(())
     }
+}
 
+impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
     pub fn new(
         config: Config,
         owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
@@ -262,49 +326,29 @@ impl Ratecontroller {
         up_direction: StatsDirection,
         metrics: MetricsSender,
     ) -> anyhow::Result<Self> {
-        let dl_qdisc = Netlink::qdisc_from_ifname(config.download_interface.as_str())?;
-        let dl_safe_rates =
-            generate_initial_speeds(config.download_base_kbits, config.speed_hist_size);
-        let ul_qdisc = Netlink::qdisc_from_ifname(config.upload_interface.as_str())?;
-        let ul_safe_rates =
-            generate_initial_speeds(config.upload_base_kbits, config.speed_hist_size);
-
-        let (cur_rx, cur_tx) = get_interface_stats(&config, down_direction, up_direction)?;
-
-        Ok(Self {
+        Self::new_with_backends(
             config,
-            down_direction,
             owd_baseline,
             owd_recent,
             reflectors_lock,
             reselect_trigger,
-            state_dl: State::new(dl_qdisc, cur_rx, dl_safe_rates),
-            state_ul: State::new(ul_qdisc, cur_tx, ul_safe_rates),
+            down_direction,
             up_direction,
             metrics,
-        })
+            interface_stats_provider(),
+            traffic_control_backend(),
+        )
     }
+}
 
+impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let sleep_time = Duration::from_secs_f64(self.config.min_change_interval);
 
         let mut lastchg_t = Instant::now();
         let mut lastdump_t = Instant::now();
 
-        // set qdisc rates to 60% of base rate to make sure we start with sane baselines
-        self.state_dl.current_rate = self.config.download_base_kbits * 0.6;
-        self.state_ul.current_rate = self.config.upload_base_kbits * 0.6;
-
-        Netlink::set_qdisc_rate(
-            self.state_dl.qdisc,
-            self.state_dl.current_rate.round() as u64,
-            self.config.dry_run,
-        )?;
-        Netlink::set_qdisc_rate(
-            self.state_ul.qdisc,
-            self.state_ul.current_rate.round() as u64,
-            self.config.dry_run,
-        )?;
+        self.request_initial_rates()?;
 
         let mut speed_hist_fd: Option<File> = None;
         let mut speed_hist_fd_inner: File;
@@ -349,21 +393,13 @@ impl Ratecontroller {
                 // if it's been long enough, and the stats indicate needing to change speeds
                 // change speeds here
 
-                (self.state_dl.current_bytes, self.state_ul.current_bytes) =
-                    get_interface_stats(&self.config, self.down_direction, self.up_direction)?;
-                if self.state_dl.current_bytes == -1 || self.state_ul.current_bytes == -1 {
-                    warn!(
-                        "One or both Netlink stats could not be read. Skipping rate control algorithm"
-                    );
-                    self.metrics.send(Metric::Event {
-                        name: "netlink_read_failure",
-                        reason: "",
-                        reflector: None,
-                        tags: &[],
-                    });
-                    continue;
-                }
-
+                (self.state_dl.current_bytes, self.state_ul.current_bytes) = get_interface_stats(
+                    &mut self.stats_provider,
+                    &self.config.download_interface,
+                    &self.config.upload_interface,
+                    self.down_direction,
+                    self.up_direction,
+                )?;
                 self.update_deltas()?;
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
@@ -377,13 +413,13 @@ impl Ratecontroller {
                     self.state_dl.next_rate = self.config.download_min_kbits;
                     self.state_ul.next_rate = self.config.upload_min_kbits;
 
-                    Netlink::set_qdisc_rate(
-                        self.state_dl.qdisc,
+                    self.traffic_control.set_rate(
+                        &self.state_dl.shaper,
                         self.state_dl.next_rate as u64,
                         self.config.dry_run,
                     )?;
-                    Netlink::set_qdisc_rate(
-                        self.state_ul.qdisc,
+                    self.traffic_control.set_rate(
+                        &self.state_ul.shaper,
                         self.state_ul.next_rate as u64,
                         self.config.dry_run,
                     )?;
@@ -400,22 +436,22 @@ impl Ratecontroller {
                     || self.state_ul.next_rate != self.state_ul.current_rate
                 {
                     info!(
-                        "Adjusting rates (D/U): {} / {} kbit/s",
+                        "Requesting rates (D/U): {} / {} kbit/s",
                         self.state_dl.next_rate as u64, self.state_ul.next_rate as u64
                     );
                 }
 
                 if self.state_dl.next_rate != self.state_dl.current_rate {
-                    Netlink::set_qdisc_rate(
-                        self.state_dl.qdisc,
+                    self.traffic_control.set_rate(
+                        &self.state_dl.shaper,
                         self.state_dl.next_rate as u64,
                         self.config.dry_run,
                     )?;
                 }
 
                 if self.state_ul.next_rate != self.state_ul.current_rate {
-                    Netlink::set_qdisc_rate(
-                        self.state_ul.qdisc,
+                    self.traffic_control.set_rate(
+                        &self.state_ul.shaper,
                         self.state_ul.next_rate as u64,
                         self.config.dry_run,
                     )?;

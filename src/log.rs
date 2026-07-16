@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
-use rustix::thread::ClockId;
+use rustix::time::ClockId;
 
 use crate::time::Time;
 

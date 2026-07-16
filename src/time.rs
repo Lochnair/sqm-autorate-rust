@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use rustix::fs::Timespec;
-use rustix::thread::ClockId;
-use rustix::time::clock_gettime;
+use rustix::time::{ClockId, clock_gettime};
 
 pub struct Time {
     time_s: u64,

@@ -11,10 +11,12 @@ mod baseliner;
 mod config;
 mod log;
 mod metrics;
+#[cfg(target_os = "linux")]
 mod netlink;
 mod pinger;
 mod pinger_icmp;
 mod pinger_icmp_ts;
+mod platform;
 mod ratecontroller;
 mod reflector_selector;
 mod time;
@@ -34,10 +36,10 @@ use std::time::{Duration, Instant};
 use std::{process, thread};
 
 use crate::config::{Config, MeasurementType};
-use crate::netlink::{Netlink, Qdisc};
 use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
+use crate::platform::{TrafficControlBackend, traffic_control_backend};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
 
@@ -101,19 +103,28 @@ fn create_pinger(measurement_type: MeasurementType) -> (PingListenerBox, PingSen
     }
 }
 
-fn initialize_shaper(config: &Config) -> anyhow::Result<(Qdisc, Qdisc)> {
-    let down = Netlink::qdisc_from_ifname(&config.download_interface)?;
-    let up = Netlink::qdisc_from_ifname(&config.upload_interface)?;
+fn initialize_shaper<T: TrafficControlBackend>(
+    config: &Config,
+    traffic_control: &mut T,
+) -> anyhow::Result<(T::Handle, T::Handle)> {
+    initialize_shaper_with_settle_time(config, traffic_control, Duration::from_secs(2))
+}
+
+fn initialize_shaper_with_settle_time<T: TrafficControlBackend>(
+    config: &Config,
+    traffic_control: &mut T,
+    settle_time: Duration,
+) -> anyhow::Result<(T::Handle, T::Handle)> {
+    let down = traffic_control.find_shaper(&config.download_interface)?;
+    let up = traffic_control.find_shaper(&config.upload_interface)?;
 
     info!(
-        "Setting shaper rates to minimum (D/L): {} / {}",
+        "Requesting minimum shaper rates (D/U): {} / {}",
         config.download_min_kbits, config.upload_min_kbits,
     );
 
-    Netlink::set_qdisc_rate(down, config.download_min_kbits as u64, config.dry_run)?;
-    Netlink::set_qdisc_rate(up, config.upload_min_kbits as u64, config.dry_run)?;
-
-    let settle_time = Duration::from_secs(2);
+    traffic_control.set_rate(&down, config.download_min_kbits as u64, config.dry_run)?;
+    traffic_control.set_rate(&up, config.upload_min_kbits as u64, config.dry_run)?;
 
     info!(
         "Sleeping for {} seconds to give the shaper a chance to control existing bloat",
@@ -163,19 +174,25 @@ fn probe_identifier() -> u16 {
     (process::id() & 0xffff) as u16
 }
 
-fn restore_shaper(config: &Config, down: Qdisc, up: Qdisc) {
+fn restore_shaper<T: TrafficControlBackend>(
+    config: &Config,
+    traffic_control: &mut T,
+    down: &T::Handle,
+    up: &T::Handle,
+) {
     info!(
-        "Restoring base shaper rates (D/L): {} / {}",
+        "Requesting restoration to base shaper rates (D/U): {} / {}",
         config.download_base_kbits, config.upload_base_kbits,
     );
 
     if let Err(error) =
-        Netlink::set_qdisc_rate(down, config.download_base_kbits as u64, config.dry_run)
+        traffic_control.set_rate(down, config.download_base_kbits as u64, config.dry_run)
     {
         warn!("Failed to restore download shaper rate: {error}");
     }
 
-    if let Err(error) = Netlink::set_qdisc_rate(up, config.upload_base_kbits as u64, config.dry_run)
+    if let Err(error) =
+        traffic_control.set_rate(up, config.upload_base_kbits as u64, config.dry_run)
     {
         warn!("Failed to restore upload shaper rate: {error}");
     }
@@ -319,7 +336,13 @@ fn run(config: Config) -> anyhow::Result<()> {
         event_metrics: event_metrics.clone(),
     };
 
-    let (down_qdisc, up_qdisc) = initialize_shaper(&config)?;
+    let mut main_traffic_control = traffic_control_backend();
+    if main_traffic_control.is_observe_only() {
+        warn!(
+            "Traffic control is observe-only on this platform; requested rate changes will not be applied."
+        );
+    }
+    let (down_shaper, up_shaper) = initialize_shaper(&config, &mut main_traffic_control)?;
 
     let err_tx = error_tx.clone();
     let listener_peers = Arc::clone(&reflector_peers);
@@ -448,7 +471,7 @@ fn run(config: Config) -> anyhow::Result<()> {
         let _ = handle.join();
     }
 
-    restore_shaper(&config, down_qdisc, up_qdisc);
+    restore_shaper(&config, &mut main_traffic_control, &down_shaper, &up_shaper);
 
     result
 }

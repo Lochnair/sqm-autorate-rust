@@ -10,6 +10,8 @@ use netlink_bindings::{rt_link, tc};
 use netlink_socket2::NetlinkSocket;
 use thiserror::Error;
 
+use crate::platform::{InterfaceStats, InterfaceStatsProvider, TrafficControlBackend};
+
 #[derive(Debug, Error)]
 pub enum NetlinkError {
     #[error("Couldn't find interface `{0}`")]
@@ -34,12 +36,13 @@ pub enum NetlinkError {
     Utf8Error(#[from] Utf8Error),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Qdisc {
     pub ifindex: i32,
     pub parent: u32,
 }
 
+#[derive(Debug, Default)]
 pub struct Netlink {}
 
 impl Netlink {
@@ -138,5 +141,32 @@ impl Netlink {
         iter.recv_ack()?;
 
         Ok(())
+    }
+}
+
+impl InterfaceStatsProvider for Netlink {
+    type Error = NetlinkError;
+
+    fn read_stats(&mut self, interface: &str) -> Result<InterfaceStats, Self::Error> {
+        let (rx_bytes, tx_bytes) = Self::get_interface_stats(interface)?;
+        Ok(InterfaceStats { rx_bytes, tx_bytes })
+    }
+}
+
+impl TrafficControlBackend for Netlink {
+    type Error = NetlinkError;
+    type Handle = Qdisc;
+
+    fn find_shaper(&mut self, interface: &str) -> Result<Self::Handle, Self::Error> {
+        Self::qdisc_from_ifname(interface)
+    }
+
+    fn set_rate(
+        &mut self,
+        shaper: &Self::Handle,
+        bandwidth_kbit: u64,
+        dry_run: bool,
+    ) -> Result<(), Self::Error> {
+        Self::set_qdisc_rate(*shaper, bandwidth_kbit, dry_run)
     }
 }

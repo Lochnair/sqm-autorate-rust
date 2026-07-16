@@ -11,7 +11,7 @@ use crate::time::Time;
 use icmp_socket2::Icmpv4Message;
 use icmp_socket2::Icmpv4Packet;
 use icmp_socket2::packet::WithTimestampRequest;
-use rustix::thread::ClockId;
+use rustix::time::ClockId;
 use std::net::IpAddr;
 use std::time::Instant;
 
