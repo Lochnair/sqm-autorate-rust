@@ -308,7 +308,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 state_dl.deltas.len(),
                 state_ul.deltas.len()
             );
-            let _ = self.reselect_trigger.send(true);
+            let _ = self.reselect_trigger.try_send(true);
         }
 
         Ok(())

@@ -265,7 +265,7 @@ fn run(config: Config) -> anyhow::Result<()> {
 
     let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
     let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
-    let (reselect_tx, reselect_rx) = flume::unbounded();
+    let (reselect_tx, reselect_rx) = flume::bounded(1);
 
     let dropped = Arc::new(AtomicU32::new(0));
 

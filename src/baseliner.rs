@@ -122,9 +122,9 @@ impl Baseliner {
                     reflector: Some(time_data.reflector),
                     tags: &[],
                 });
-                // If reselection is disabled this would trigger an error
-                // so just ignore the result
-                let _ = self.reselect_trigger.send(true);
+                // The reselect channel is bounded to 1,
+                // so we use try_send to avoid blocking if the channel is full
+                let _ = self.reselect_trigger.try_send(true);
             } else {
                 owd_baseline.down_ewma = owd_baseline.down_ewma * slow_factor
                     + (1.0 - slow_factor) * time_data.down_time;
