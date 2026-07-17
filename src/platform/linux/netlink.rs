@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::platform::{InterfaceStats, InterfaceStatsProvider, TrafficControlBackend};
 
 #[derive(Debug, Error)]
-pub enum NetlinkError {
+pub(crate) enum NetlinkError {
     #[error("Couldn't find interface `{0}`")]
     InterfaceNotFound(String),
 
@@ -37,16 +37,16 @@ pub enum NetlinkError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Qdisc {
-    pub ifindex: i32,
-    pub parent: u32,
+pub(crate) struct Qdisc {
+    ifindex: i32,
+    parent: u32,
 }
 
 #[derive(Debug, Default)]
-pub struct Netlink {}
+pub(crate) struct Netlink {}
 
 impl Netlink {
-    pub fn find_interface(ifname: &str) -> Result<i32, NetlinkError> {
+    fn find_interface(ifname: &str) -> Result<i32, NetlinkError> {
         let mut socket = NetlinkSocket::new();
 
         let mut request = rt_link::Request::new().op_getlink_do(&Default::default());
@@ -59,7 +59,7 @@ impl Netlink {
         Ok(header.ifi_index)
     }
 
-    pub fn get_interface_stats(ifname: &str) -> Result<(u64, u64), NetlinkError> {
+    fn get_interface_stats(ifname: &str) -> Result<(u64, u64), NetlinkError> {
         let mut socket = NetlinkSocket::new();
 
         let mut request = rt_link::Request::new().op_getlink_do(&Default::default());
@@ -79,7 +79,7 @@ impl Netlink {
         Err(NetlinkError::NoInterfaceStatsFound(ifname.to_string()))
     }
 
-    pub fn qdisc_from_ifindex(ifindex: i32, ifname: &str) -> Result<Qdisc, NetlinkError> {
+    fn qdisc_from_ifindex(ifindex: i32, ifname: &str) -> Result<Qdisc, NetlinkError> {
         let mut socket = NetlinkSocket::new();
         let header = tc::Tcmsg::new();
         let request = tc::Request::new().op_getqdisc_dump(&header);
@@ -105,12 +105,12 @@ impl Netlink {
         Err(NetlinkError::NoQdiscFound(ifname.to_string()))
     }
 
-    pub fn qdisc_from_ifname(ifname: &str) -> Result<Qdisc, NetlinkError> {
+    fn qdisc_from_ifname(ifname: &str) -> Result<Qdisc, NetlinkError> {
         let ifindex = Netlink::find_interface(ifname)?;
         Netlink::qdisc_from_ifindex(ifindex, ifname)
     }
 
-    pub fn set_qdisc_rate(
+    fn set_qdisc_rate(
         qdisc: Qdisc,
         bandwidth_kbit: u64,
         dry_run: bool,

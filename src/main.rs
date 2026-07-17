@@ -11,8 +11,6 @@ mod baseliner;
 mod config;
 mod log;
 mod metrics;
-#[cfg(target_os = "linux")]
-mod netlink;
 mod pinger;
 mod pinger_icmp;
 mod pinger_icmp_ts;
@@ -39,7 +37,7 @@ use crate::config::{Config, MeasurementType};
 use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
-use crate::platform::{TrafficControlBackend, traffic_control_backend};
+use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
 use crate::ratecontroller::{Ratecontroller, StatsDirection};
 use crate::reflector_selector::ReflectorSelector;
 
@@ -337,11 +335,6 @@ fn run(config: Config) -> anyhow::Result<()> {
     };
 
     let mut main_traffic_control = traffic_control_backend();
-    if main_traffic_control.is_observe_only() {
-        warn!(
-            "Traffic control is observe-only on this platform; requested rate changes will not be applied."
-        );
-    }
     let (down_shaper, up_shaper) = initialize_shaper(&config, &mut main_traffic_control)?;
 
     let err_tx = error_tx.clone();
@@ -483,6 +476,7 @@ fn main() -> anyhow::Result<()> {
 
     let config = Config::new()?;
     log::init(config.log_level)?;
+    warn_platform_limitations();
 
     run(config)
 }

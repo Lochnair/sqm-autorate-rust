@@ -7,15 +7,17 @@ use std::io;
 use std::mem::size_of;
 use std::ptr;
 
+use log::warn;
 use thiserror::Error;
 
-use super::{InterfaceStats, InterfaceStatsProvider};
+use super::noop::NoopTrafficControl;
+use crate::platform::{InterfaceStats, InterfaceStatsProvider};
 
 const ROUTE_MESSAGE_PREFIX_LEN: usize = size_of::<libc::c_ushort>() + 2;
 const SYSCTL_FETCH_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Error)]
-pub enum MacOsInterfaceStatsError {
+pub(crate) enum MacOsInterfaceStatsError {
     #[error("interface name contains a NUL byte")]
     InterfaceNameContainsNul(#[source] NulError),
 
@@ -41,7 +43,7 @@ pub enum MacOsInterfaceStatsError {
 }
 
 #[derive(Debug, Default)]
-pub struct MacOsInterfaceStats;
+pub(crate) struct MacOsInterfaceStats;
 
 impl InterfaceStatsProvider for MacOsInterfaceStats {
     type Error = MacOsInterfaceStatsError;
@@ -196,4 +198,21 @@ fn parse_route_messages(
     Err(MacOsInterfaceStatsError::NoInterfaceStats {
         interface_index: requested_interface_index,
     })
+}
+
+pub(crate) type PlatformInterfaceStats = MacOsInterfaceStats;
+pub(crate) type PlatformTrafficControl = NoopTrafficControl;
+
+pub(crate) fn interface_stats_provider() -> PlatformInterfaceStats {
+    MacOsInterfaceStats
+}
+
+pub(crate) fn traffic_control_backend() -> PlatformTrafficControl {
+    NoopTrafficControl
+}
+
+pub(crate) fn warn_platform_limitations() {
+    warn!(
+        "Traffic control is unavailable on macOS; requested rate changes will be calculated but not applied."
+    );
 }
