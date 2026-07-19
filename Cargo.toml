@@ -32,7 +32,7 @@ features = ["std"]
 version = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-netlink-bindings = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "0b609e9380610e7da73f8c43cdf804a1d1bf5474", features = ["rt-link", "tc"] }
+netlink-bindings = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "928e9ca5395701db8b7998684689fa6c72506ca0", features = ["rt-link", "tc"] }
 netlink-socket2 = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "0b609e9380610e7da73f8c43cdf804a1d1bf5474" }
 rust-uci = { git = "https://github.com/namib-project/rust-uci.git", rev = "3e7b6153b6df92b45428c32bb6461756563deecb", optional = true }
 
