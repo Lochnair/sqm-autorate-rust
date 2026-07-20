@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 mod netlink;
+#[cfg(all(target_os = "linux", feature = "uci"))]
+mod uci;
 
 pub(crate) type PlatformInterfaceStats = netlink::Netlink;
 pub(crate) type PlatformTrafficControl = netlink::Netlink;

@@ -33,14 +33,20 @@ pub(crate) trait TrafficControlBackend: Send {
 #[cfg(not(target_os = "linux"))]
 mod noop;
 
+#[cfg(target_os = "freebsd")]
+mod freebsd;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
 mod unsupported;
+
+#[cfg(target_os = "freebsd")]
+use freebsd as imp;
 
 #[cfg(target_os = "linux")]
 use linux as imp;
@@ -48,7 +54,7 @@ use linux as imp;
 #[cfg(target_os = "macos")]
 use macos as imp;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
 use unsupported as imp;
 
 pub(crate) use imp::{
