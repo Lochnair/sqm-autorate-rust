@@ -66,8 +66,6 @@ impl From<FlexiBool> for bool {
 pub enum MeasurementType {
     Icmp = 1,
     IcmpTimestamps,
-    Ntp,
-    TcpTimestamps,
 }
 
 impl Display for MeasurementType {
@@ -75,8 +73,6 @@ impl Display for MeasurementType {
         match self {
             MeasurementType::Icmp => write!(f, "icmp"),
             MeasurementType::IcmpTimestamps => write!(f, "icmp-timestamps"),
-            MeasurementType::Ntp => write!(f, "ntp"),
-            MeasurementType::TcpTimestamps => write!(f, "tcp-timestamps"),
         }
     }
 }
@@ -88,8 +84,6 @@ impl FromStr for MeasurementType {
         return match s.to_lowercase().as_str() {
             "icmp" => Ok(MeasurementType::Icmp),
             "icmp-timestamps" => Ok(MeasurementType::IcmpTimestamps),
-            "ntp" => Ok(MeasurementType::Ntp),
-            "tcp-timestamps" => Ok(MeasurementType::TcpTimestamps),
             &_ => Err(ConfigError::InvalidMeasurementType(s.to_string())),
         };
     }

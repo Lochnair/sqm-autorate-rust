@@ -60,9 +60,6 @@ const INFLIGHT_PROBE_TTL: Duration = Duration::from_secs(30);
 fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
     match type_ {
         MeasurementType::Icmp | MeasurementType::IcmpTimestamps => IcmpSocket4::new(),
-        _ => {
-            unimplemented!()
-        }
     }
 }
 

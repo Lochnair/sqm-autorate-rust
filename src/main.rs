@@ -95,9 +95,6 @@ fn create_pinger(measurement_type: MeasurementType) -> (PingListenerBox, PingSen
             Box::new(PingerICMPTimestampListener {}),
             Box::new(PingerICMPTimestampSender {}),
         ),
-        MeasurementType::Ntp | MeasurementType::TcpTimestamps => {
-            todo!()
-        }
     }
 }
 
