@@ -132,11 +132,7 @@ impl ReflectorSelector {
                 info!("Reflector selector shutting down");
                 return Ok(());
             }
-            /*
-             * Selection is triggered either by some other thread triggering it through the channel,
-             * or it passes the timeout. In any case we don't care about the result of this function,
-             * so we ignore the result of it.
-             */
+
             let triggered = match wait_for_trigger_or_deadline(
                 &self.trigger_channel,
                 &self.snapshot_rx,
