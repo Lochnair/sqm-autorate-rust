@@ -20,7 +20,7 @@ mod reflector_selector;
 mod time;
 mod util;
 
-use crate::baseliner::{Baseliner, ReflectorStats};
+use crate::baseliner::Baseliner;
 use crate::metrics::{Metric, Metrics, MetricsSender};
 use ::log::{debug, info, warn};
 use flume::RecvTimeoutError;
@@ -255,10 +255,14 @@ fn run(config: Config) -> anyhow::Result<()> {
         active_count: active_reflector_count,
     } = setup_reflectors(&config)?;
 
-    let owd_baseline = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-    let owd_recent = Arc::new(Mutex::new(HashMap::<IpAddr, ReflectorStats>::new()));
-
     let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
+    let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
+    let (selection_snapshot_tx, selection_snapshot_rx) = if reselection_enabled {
+        let (tx, rx) = flume::unbounded();
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
     let (reselect_tx, reselect_rx) = flume::bounded(1);
 
@@ -322,11 +326,11 @@ fn run(config: Config) -> anyhow::Result<()> {
 
     let baseliner = Baseliner {
         config: config.clone(),
-        owd_baseline: Arc::clone(&owd_baseline),
-        owd_recent: Arc::clone(&owd_recent),
         reselect_trigger: reselect_tx.clone(),
         start_time,
         stats_rx: baseliner_stats_rx,
+        control_tx: control_snapshot_tx,
+        selection_tx: selection_snapshot_tx,
         baseline_metrics,
         event_metrics: event_metrics.clone(),
     };
@@ -386,7 +390,8 @@ fn run(config: Config) -> anyhow::Result<()> {
     if reselection_enabled {
         let reflector_selector = ReflectorSelector {
             config: config.clone(),
-            owd_recent: Arc::clone(&owd_recent),
+            snapshot_rx: selection_snapshot_rx
+                .expect("reselection snapshot receiver must exist when reselection is enabled"),
             reflector_peers_lock: Arc::clone(&reflector_peers),
             reflector_pool,
             trigger_channel: reselect_rx,
@@ -418,8 +423,7 @@ fn run(config: Config) -> anyhow::Result<()> {
 
     let mut ratecontroller = Ratecontroller::new(
         config.clone(),
-        owd_baseline,
-        owd_recent,
+        control_snapshot_rx,
         reflector_peers,
         reselect_tx,
         dl_direction,

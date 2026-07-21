@@ -9,29 +9,73 @@ use crate::Config;
 use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
-use crate::util::ArcMutex;
-use crate::util::MutexExt;
 use flume::{Receiver, Sender};
 use log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 
-#[derive(Copy, Clone)]
-pub struct ReflectorStats {
-    pub down_ewma: f64,
-    pub up_ewma: f64,
-    pub last_receive_time_s: Instant,
+const STALE_AFTER: Duration = Duration::from_secs(30);
+const ANOMALY_THRESHOLD_MS: f64 = 5_000.0;
+const BASELINE_HALF_LIFE_SECS: f64 = 135.0;
+const RECENT_HALF_LIFE_SECS: f64 = 0.4;
+
+#[derive(Clone, Copy, Debug)]
+pub struct EwmaStats {
+    pub down: f64,
+    pub up: f64,
+}
+
+impl EwmaStats {
+    fn from_reply(reply: &PingReply) -> Self {
+        Self {
+            down: reply.down_time,
+            up: reply.up_time,
+        }
+    }
+
+    fn update(&mut self, sample: Self, factor: f64) {
+        self.down = self.down * factor + sample.down * (1.0 - factor);
+        self.up = self.up * factor + sample.up * (1.0 - factor);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ReflectorState {
+    pub baseline: EwmaStats,
+    pub recent: EwmaStats,
+    pub last_receive_at: Instant,
+}
+
+impl ReflectorState {
+    fn new(sample: EwmaStats, received_at: Instant) -> Self {
+        Self {
+            baseline: sample,
+            recent: sample,
+            last_receive_at: received_at,
+        }
+    }
+
+    fn reset(&mut self, sample: EwmaStats, received_at: Instant) {
+        *self = Self::new(sample, received_at);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ControlSnapshot {
+    pub generated_at: Instant,
+    pub reflectors: HashMap<IpAddr, ReflectorState>,
 }
 
 pub struct Baseliner {
     pub config: Config,
-    pub owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
-    pub owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
     pub stats_rx: Receiver<PingReply>,
+    pub control_tx: Sender<ControlSnapshot>,
+    pub selection_tx: Option<Sender<ControlSnapshot>>,
     pub baseline_metrics: MetricsSender,
     pub event_metrics: MetricsSender,
 }
@@ -40,146 +84,127 @@ fn ewma_factor(tick: f64, dur: f64) -> f64 {
     ((0.5_f64).ln() / (dur / tick)).exp()
 }
 
-fn update_reflector_stats(
-    mut baseline: ReflectorStats,
-    mut recent: ReflectorStats,
-    down_time: f64,
-    up_time: f64,
-    receive_time: Instant,
+fn update_reflector_state(
+    state: &mut ReflectorState,
+    sample: EwmaStats,
+    received_at: Instant,
     start_time: Instant,
     slow_factor: f64,
     fast_factor: f64,
-) -> (ReflectorStats, ReflectorStats, bool) {
-    if receive_time
-        .duration_since(baseline.last_receive_time_s)
-        .as_secs_f64()
-        > 30.0
-        || receive_time
-            .duration_since(recent.last_receive_time_s)
-            .as_secs_f64()
-            > 30.0
+) -> bool {
+    if received_at.saturating_duration_since(state.last_receive_at) > STALE_AFTER {
+        state.reset(sample, received_at);
+    }
+
+    if sample.up > state.baseline.up + ANOMALY_THRESHOLD_MS
+        || sample.down > state.baseline.down + ANOMALY_THRESHOLD_MS
     {
-        baseline.down_ewma = down_time;
-        baseline.up_ewma = up_time;
-        recent.down_ewma = down_time;
-        recent.up_ewma = up_time;
+        state.last_receive_at = start_time;
+        return true;
     }
 
-    baseline.last_receive_time_s = receive_time;
-    recent.last_receive_time_s = receive_time;
+    state.baseline.update(sample, slow_factor);
+    state.recent.update(sample, fast_factor);
 
-    if up_time > baseline.up_ewma + 5000.0 || down_time > baseline.down_ewma + 5000.0 {
-        baseline.last_receive_time_s = start_time;
-        recent.last_receive_time_s = start_time;
-        return (baseline, recent, true);
+    state.baseline.down = state.baseline.down.min(state.recent.down);
+    state.baseline.up = state.baseline.up.min(state.recent.up);
+    state.last_receive_at = received_at;
+
+    false
+}
+
+fn process_reply(
+    reflectors: &mut HashMap<IpAddr, ReflectorState>,
+    reply: &PingReply,
+    start_time: Instant,
+    slow_factor: f64,
+    fast_factor: f64,
+) -> (ReflectorState, bool) {
+    let sample = EwmaStats::from_reply(reply);
+    let state = reflectors
+        .entry(reply.reflector)
+        .or_insert_with(|| ReflectorState::new(sample, reply.last_receive_time_s));
+    let anomaly = update_reflector_state(
+        state,
+        sample,
+        reply.last_receive_time_s,
+        start_time,
+        slow_factor,
+        fast_factor,
+    );
+
+    (*state, anomaly)
+}
+
+fn control_snapshot(
+    reflectors: &HashMap<IpAddr, ReflectorState>,
+    generated_at: Instant,
+) -> ControlSnapshot {
+    ControlSnapshot {
+        generated_at,
+        reflectors: reflectors.clone(),
     }
-
-    baseline.down_ewma = baseline.down_ewma * slow_factor + (1.0 - slow_factor) * down_time;
-    baseline.up_ewma = baseline.up_ewma * slow_factor + (1.0 - slow_factor) * up_time;
-
-    recent.down_ewma = recent.down_ewma * fast_factor + (1.0 - fast_factor) * down_time;
-    recent.up_ewma = recent.up_ewma * fast_factor + (1.0 - fast_factor) * up_time;
-
-    if baseline.down_ewma > recent.down_ewma {
-        baseline.down_ewma = recent.down_ewma;
-    }
-
-    if baseline.up_ewma > recent.up_ewma {
-        baseline.up_ewma = recent.up_ewma;
-    }
-
-    (baseline, recent, false)
 }
 
 impl Baseliner {
     pub fn run(&self) -> anyhow::Result<()> {
-        /*
-         * 135 seconds to decay to 50% for the slow factor and
-         * 0.4 seconds to decay to 50% for the fast factor.
-         * The fast one can be adjusted to tune, try anything from 0.01 to 3.0 to get more or less sensitivity
-         * with more sensitivity we respond faster to bloat, but are at risk from triggering due to lag spikes that
-         * aren't bloat related, with less sensitivity (bigger numbers) we smooth through quick spikes
-         * but take longer to respond to real bufferbloat
-         */
-        let slow_factor = ewma_factor(self.config.tick_interval, 135.0);
-        let fast_factor = ewma_factor(self.config.tick_interval, 0.4);
+        let mut reflectors = HashMap::<IpAddr, ReflectorState>::new();
+
+        let slow_factor = ewma_factor(self.config.tick_interval, BASELINE_HALF_LIFE_SECS);
+        let fast_factor = ewma_factor(self.config.tick_interval, RECENT_HALF_LIFE_SECS);
 
         loop {
             if SHUTDOWN.load(Ordering::Relaxed) {
                 info!("Baseliner shutting down");
                 return Ok(());
             }
-            let time_data = self.stats_rx.recv()?;
 
-            let mut owd_baseline_map = self.owd_baseline.lock_anyhow()?;
-            let mut owd_recent_map = self.owd_recent.lock_anyhow()?;
-
-            let owd_baseline_new = ReflectorStats {
-                down_ewma: time_data.down_time,
-                up_ewma: time_data.up_time,
-                last_receive_time_s: time_data.last_receive_time_s,
-            };
-
-            let owd_recent_new = ReflectorStats {
-                down_ewma: time_data.down_time,
-                up_ewma: time_data.up_time,
-                last_receive_time_s: time_data.last_receive_time_s,
-            };
-
-            let owd_baseline = owd_baseline_map
-                .entry(time_data.reflector)
-                .or_insert(owd_baseline_new);
-
-            let owd_recent = owd_recent_map
-                .entry(time_data.reflector)
-                .or_insert(owd_recent_new);
-
-            let (updated_baseline, updated_recent, anomaly) = update_reflector_stats(
-                *owd_baseline,
-                *owd_recent,
-                time_data.down_time,
-                time_data.up_time,
-                time_data.last_receive_time_s,
+            let reply = self.stats_rx.recv()?;
+            let reflector = reply.reflector;
+            let (state, anomaly) = process_reply(
+                &mut reflectors,
+                &reply,
                 self.start_time,
                 slow_factor,
                 fast_factor,
             );
-            *owd_baseline = updated_baseline;
-            *owd_recent = updated_recent;
 
-            // if this reflection is more than 5 seconds higher than baseline... mark it no good and trigger a reselection
             if anomaly {
                 info!(
                     "Reflector {} has OWD > 5 seconds more than baseline, triggering reselection",
-                    time_data.reflector
+                    reflector
                 );
                 self.event_metrics.send(Metric::Event {
                     name: "reselection",
                     reason: "anomaly",
-                    reflector: Some(time_data.reflector),
+                    reflector: Some(reflector),
                     tags: &[],
                 });
-                // The reselect channel is bounded to 1,
-                // so we use try_send to avoid blocking if the channel is full
                 let _ = self.reselect_trigger.try_send(true);
             }
 
             self.baseline_metrics.send(Metric::Baseline {
-                reflector: time_data.reflector,
-                baseline_up_ewma: owd_baseline.up_ewma,
-                baseline_down_ewma: owd_baseline.down_ewma,
-                recent_up_ewma: owd_recent.up_ewma,
-                recent_down_ewma: owd_recent.down_ewma,
+                reflector,
+                baseline_up_ewma: state.baseline.up,
+                baseline_down_ewma: state.baseline.down,
+                recent_up_ewma: state.recent.up,
+                recent_down_ewma: state.recent.down,
             });
 
             debug!(
                 "Reflector {} up baseline = {} down baseline = {}",
-                time_data.reflector, owd_baseline.up_ewma, owd_baseline.down_ewma
+                reflector, state.baseline.up, state.baseline.down
             );
             debug!(
                 "Reflector {} up recent = {} down recent = {}",
-                time_data.reflector, owd_recent.up_ewma, owd_recent.down_ewma
+                reflector, state.recent.up, state.recent.down
             );
+
+            let snapshot = control_snapshot(&reflectors, Instant::now());
+            if let Some(selection_tx) = &self.selection_tx {
+                let _ = selection_tx.send(snapshot.clone());
+            }
+            self.control_tx.send(snapshot)?;
         }
     }
 }
@@ -187,13 +212,46 @@ impl Baseliner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MeasurementType;
     use std::time::Duration;
 
-    fn stats(down_ewma: f64, up_ewma: f64, last_receive_time_s: Instant) -> ReflectorStats {
-        ReflectorStats {
-            down_ewma,
-            up_ewma,
-            last_receive_time_s,
+    fn state(
+        baseline_down: f64,
+        baseline_up: f64,
+        recent_down: f64,
+        recent_up: f64,
+        last_receive_at: Instant,
+    ) -> ReflectorState {
+        ReflectorState {
+            baseline: EwmaStats {
+                down: baseline_down,
+                up: baseline_up,
+            },
+            recent: EwmaStats {
+                down: recent_down,
+                up: recent_up,
+            },
+            last_receive_at,
+        }
+    }
+
+    fn sample(down: f64, up: f64) -> EwmaStats {
+        EwmaStats { down, up }
+    }
+
+    fn reply(reflector: IpAddr, down_time: f64, up_time: f64, received_at: Instant) -> PingReply {
+        PingReply {
+            reflector,
+            measurement_type: MeasurementType::Icmp,
+            seq: 0,
+            rtt: down_time + up_time,
+            current_time: 0,
+            down_time,
+            up_time,
+            originate_timestamp: 0,
+            receive_timestamp: 0,
+            transmit_timestamp: 0,
+            last_receive_time_s: received_at,
         }
     }
 
@@ -208,11 +266,10 @@ mod tests {
     fn updates_ewmas() {
         let start = Instant::now();
         let receive_time = start + Duration::from_secs(1);
-        let (baseline, recent, anomaly) = update_reflector_stats(
-            stats(100.0, 100.0, start),
-            stats(100.0, 100.0, start),
-            200.0,
-            300.0,
+        let mut state = state(100.0, 100.0, 100.0, 100.0, start);
+        let anomaly = update_reflector_state(
+            &mut state,
+            sample(200.0, 300.0),
             receive_time,
             start,
             0.9,
@@ -220,22 +277,20 @@ mod tests {
         );
 
         assert!(!anomaly);
-        assert_close(baseline.down_ewma, 110.0);
-        assert_close(baseline.up_ewma, 120.0);
-        assert_close(recent.down_ewma, 150.0);
-        assert_close(recent.up_ewma, 200.0);
-        assert_eq!(baseline.last_receive_time_s, receive_time);
-        assert_eq!(recent.last_receive_time_s, receive_time);
+        assert_close(state.baseline.down, 110.0);
+        assert_close(state.baseline.up, 120.0);
+        assert_close(state.recent.down, 150.0);
+        assert_close(state.recent.up, 200.0);
+        assert_eq!(state.last_receive_at, receive_time);
     }
 
     #[test]
     fn keeps_baseline_at_or_below_recent() {
         let start = Instant::now();
-        let (baseline, recent, anomaly) = update_reflector_stats(
-            stats(200.0, 200.0, start),
-            stats(100.0, 100.0, start),
-            100.0,
-            100.0,
+        let mut state = state(200.0, 200.0, 100.0, 100.0, start);
+        let anomaly = update_reflector_state(
+            &mut state,
+            sample(100.0, 100.0),
             start + Duration::from_secs(1),
             start,
             0.9,
@@ -243,21 +298,20 @@ mod tests {
         );
 
         assert!(!anomaly);
-        assert_close(baseline.down_ewma, 100.0);
-        assert_close(baseline.up_ewma, 100.0);
-        assert_close(recent.down_ewma, 100.0);
-        assert_close(recent.up_ewma, 100.0);
+        assert_close(state.baseline.down, 100.0);
+        assert_close(state.baseline.up, 100.0);
+        assert_close(state.recent.down, 100.0);
+        assert_close(state.recent.up, 100.0);
     }
 
     #[test]
     fn resets_stats_after_a_long_gap() {
         let start = Instant::now();
         let receive_time = start + Duration::from_secs(31);
-        let (baseline, recent, anomaly) = update_reflector_stats(
-            stats(100.0, 200.0, start),
-            stats(300.0, 400.0, start),
-            500.0,
-            600.0,
+        let mut state = state(100.0, 200.0, 300.0, 400.0, start);
+        let anomaly = update_reflector_state(
+            &mut state,
+            sample(500.0, 600.0),
             receive_time,
             start,
             0.9,
@@ -265,22 +319,41 @@ mod tests {
         );
 
         assert!(!anomaly);
-        assert_close(baseline.down_ewma, 500.0);
-        assert_close(baseline.up_ewma, 600.0);
-        assert_close(recent.down_ewma, 500.0);
-        assert_close(recent.up_ewma, 600.0);
-        assert_eq!(baseline.last_receive_time_s, receive_time);
-        assert_eq!(recent.last_receive_time_s, receive_time);
+        assert_close(state.baseline.down, 500.0);
+        assert_close(state.baseline.up, 600.0);
+        assert_close(state.recent.down, 500.0);
+        assert_close(state.recent.up, 600.0);
+        assert_eq!(state.last_receive_at, receive_time);
+    }
+
+    #[test]
+    fn does_not_reset_at_exactly_thirty_seconds() {
+        let start = Instant::now();
+        let receive_time = start + STALE_AFTER;
+        let mut state = state(100.0, 200.0, 100.0, 200.0, start);
+        let anomaly = update_reflector_state(
+            &mut state,
+            sample(200.0, 300.0),
+            receive_time,
+            start,
+            0.9,
+            0.5,
+        );
+
+        assert!(!anomaly);
+        assert_close(state.baseline.down, 110.0);
+        assert_close(state.baseline.up, 210.0);
+        assert_close(state.recent.down, 150.0);
+        assert_close(state.recent.up, 250.0);
     }
 
     #[test]
     fn marks_anomalies_for_reselection() {
         let start = Instant::now();
-        let (baseline, recent, anomaly) = update_reflector_stats(
-            stats(100.0, 200.0, start),
-            stats(300.0, 400.0, start),
-            5_101.0,
-            200.0,
+        let mut state = state(100.0, 200.0, 300.0, 400.0, start);
+        let anomaly = update_reflector_state(
+            &mut state,
+            sample(5_101.0, 200.0),
             start + Duration::from_secs(1),
             start,
             0.9,
@@ -288,23 +361,21 @@ mod tests {
         );
 
         assert!(anomaly);
-        assert_close(baseline.down_ewma, 100.0);
-        assert_close(baseline.up_ewma, 200.0);
-        assert_close(recent.down_ewma, 300.0);
-        assert_close(recent.up_ewma, 400.0);
-        assert_eq!(baseline.last_receive_time_s, start);
-        assert_eq!(recent.last_receive_time_s, start);
+        assert_close(state.baseline.down, 100.0);
+        assert_close(state.baseline.up, 200.0);
+        assert_close(state.recent.down, 300.0);
+        assert_close(state.recent.up, 400.0);
+        assert_eq!(state.last_receive_at, start);
     }
 
     #[test]
     fn does_not_mark_exact_anomaly_threshold() {
         let start = Instant::now();
         let receive_time = start + Duration::from_secs(1);
-        let (baseline, recent, anomaly) = update_reflector_stats(
-            stats(100.0, 200.0, start),
-            stats(100.0, 200.0, start),
-            5_100.0,
-            5_200.0,
+        let mut state = state(100.0, 200.0, 100.0, 200.0, start);
+        let anomaly = update_reflector_state(
+            &mut state,
+            sample(5_100.0, 5_200.0),
             receive_time,
             start,
             0.9,
@@ -312,30 +383,58 @@ mod tests {
         );
 
         assert!(!anomaly);
-        assert_eq!(baseline.last_receive_time_s, receive_time);
-        assert_eq!(recent.last_receive_time_s, receive_time);
+        assert_eq!(state.last_receive_at, receive_time);
     }
 
     #[test]
-    fn resets_both_tracks_when_either_track_is_stale() {
+    fn processed_reply_updates_combined_reflector_state() {
         let start = Instant::now();
-        let recent_time = start + Duration::from_secs(20);
-        let receive_time = start + Duration::from_secs(31);
-        let (baseline, recent, anomaly) = update_reflector_stats(
-            stats(100.0, 200.0, start),
-            stats(300.0, 400.0, recent_time),
-            500.0,
-            600.0,
-            receive_time,
+        let received_at = start + Duration::from_secs(1);
+        let reflector = "192.0.2.1".parse().unwrap();
+        let mut reflectors = HashMap::new();
+        reflectors.insert(reflector, state(100.0, 100.0, 100.0, 100.0, start));
+
+        let (updated, anomaly) = process_reply(
+            &mut reflectors,
+            &reply(reflector, 200.0, 300.0, received_at),
             start,
             0.9,
             0.5,
         );
 
         assert!(!anomaly);
-        assert_close(baseline.down_ewma, 500.0);
-        assert_close(baseline.up_ewma, 600.0);
-        assert_close(recent.down_ewma, 500.0);
-        assert_close(recent.up_ewma, 600.0);
+        assert_close(updated.baseline.down, 110.0);
+        assert_close(updated.baseline.up, 120.0);
+        assert_close(updated.recent.down, 150.0);
+        assert_close(updated.recent.up, 200.0);
+        assert_eq!(updated.last_receive_at, received_at);
+        assert_close(reflectors[&reflector].recent.up, 200.0);
+    }
+
+    #[test]
+    fn snapshot_contains_updated_combined_state() {
+        let start = Instant::now();
+        let received_at = start + Duration::from_secs(1);
+        let generated_at = received_at + Duration::from_millis(1);
+        let reflector = "192.0.2.1".parse().unwrap();
+        let mut reflectors = HashMap::new();
+
+        let (updated, anomaly) = process_reply(
+            &mut reflectors,
+            &reply(reflector, 20.0, 30.0, received_at),
+            start,
+            0.9,
+            0.5,
+        );
+        let snapshot = control_snapshot(&reflectors, generated_at);
+
+        assert!(!anomaly);
+        assert_eq!(snapshot.generated_at, generated_at);
+        assert_close(
+            snapshot.reflectors[&reflector].baseline.down,
+            updated.baseline.down,
+        );
+        assert_close(snapshot.reflectors[&reflector].recent.up, updated.recent.up);
+        assert_eq!(snapshot.reflectors[&reflector].last_receive_at, received_at);
     }
 }
