@@ -5,19 +5,19 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::Config;
 use crate::SHUTDOWN;
+use crate::baseliner::ControlSnapshot;
 use crate::metrics::{Metric, MetricsSender};
 use crate::platform::{
     InterfaceStatsProvider, PlatformInterfaceStats, PlatformTrafficControl, TrafficControlBackend,
     interface_stats_provider, traffic_control_backend,
 };
 use crate::time::Time;
-use crate::util::{ArcMutex, ArcRwLock, MutexExt, RwLockExt};
-use crate::{Config, ReflectorStats};
-use flume::Sender;
+use crate::util::{ArcRwLock, RwLockExt};
+use flume::{Receiver, Sender};
 use log::{debug, info, warn};
 use rustix::time::ClockId;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::net::IpAddr;
@@ -105,11 +105,62 @@ impl<H> State<H> {
     }
 }
 
+fn drain_latest_snapshot(
+    snapshot_rx: &Receiver<ControlSnapshot>,
+    latest: &mut Option<ControlSnapshot>,
+) {
+    while let Ok(snapshot) = snapshot_rx.try_recv() {
+        if latest
+            .as_ref()
+            .is_none_or(|current| snapshot.generated_at >= current.generated_at)
+        {
+            *latest = Some(snapshot);
+        }
+    }
+}
+
+fn deltas_from_snapshot(
+    snapshot: Option<&ControlSnapshot>,
+    reflectors: &[IpAddr],
+    now: Instant,
+    tick_interval: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut down = Vec::new();
+    let mut up = Vec::new();
+
+    let Some(snapshot) = snapshot else {
+        return (down, up);
+    };
+
+    for reflector in reflectors {
+        let Some(state) = snapshot.reflectors.get(reflector) else {
+            continue;
+        };
+
+        if now.duration_since(state.last_receive_at).as_secs_f64() < tick_interval * 2.0 {
+            let down_delta = state.recent.down - state.baseline.down;
+            let up_delta = state.recent.up - state.baseline.up;
+            down.push(down_delta);
+            up.push(up_delta);
+
+            debug!(
+                "Reflector: {} down_delay: {} up_delay: {}",
+                reflector, down_delta, up_delta
+            );
+        }
+    }
+
+    down.sort_by(|a, b| a.total_cmp(b));
+    up.sort_by(|a, b| a.total_cmp(b));
+
+    (down, up)
+}
+
 pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
     config: Config,
+    control_snapshot: Option<ControlSnapshot>,
+    control_snapshot_rx: Receiver<ControlSnapshot>,
     down_direction: StatsDirection,
-    owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
-    owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
     reflectors_lock: ArcRwLock<Vec<IpAddr>>,
     reselect_trigger: Sender<bool>,
     state_dl: State<T::Handle>,
@@ -123,8 +174,7 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
 impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     fn new_with_backends(
         config: Config,
-        owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
-        owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+        control_snapshot_rx: Receiver<ControlSnapshot>,
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
         down_direction: StatsDirection,
@@ -150,9 +200,9 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
         Ok(Self {
             config,
+            control_snapshot: None,
+            control_snapshot_rx,
             down_direction,
-            owd_baseline,
-            owd_recent,
             reflectors_lock,
             reselect_trigger,
             state_dl: State::new(dl_shaper, cur_rx, dl_safe_rates),
@@ -261,52 +311,24 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     }
 
     fn update_deltas(&mut self) -> anyhow::Result<()> {
-        let state_dl = &mut self.state_dl;
-        let state_ul = &mut self.state_ul;
-
-        state_dl.deltas.clear();
-        state_ul.deltas.clear();
-
+        drain_latest_snapshot(&self.control_snapshot_rx, &mut self.control_snapshot);
         let now_t = Instant::now();
-        let owd_baseline = self.owd_baseline.lock_anyhow()?;
-        let owd_recent = self.owd_recent.lock_anyhow()?;
         let reflectors = self.reflectors_lock.read_anyhow()?;
+        let (down_deltas, up_deltas) = deltas_from_snapshot(
+            self.control_snapshot.as_ref(),
+            &reflectors,
+            now_t,
+            self.config.tick_interval,
+        );
+        self.state_dl.deltas = down_deltas;
+        self.state_ul.deltas = up_deltas;
 
-        for reflector in reflectors.iter() {
-            // only consider this data if it's less than 2 * tick_duration seconds old
-            if owd_baseline.contains_key(reflector)
-                && owd_recent.contains_key(reflector)
-                && now_t
-                    .duration_since(owd_recent[reflector].last_receive_time_s)
-                    .as_secs_f64()
-                    < self.config.tick_interval * 2.0
-            {
-                state_dl
-                    .deltas
-                    .push(owd_recent[reflector].down_ewma - owd_baseline[reflector].down_ewma);
-                state_ul
-                    .deltas
-                    .push(owd_recent[reflector].up_ewma - owd_baseline[reflector].up_ewma);
-
-                debug!(
-                    "Reflector: {} down_delay: {} up_delay: {}",
-                    reflector,
-                    state_dl.deltas.last().unwrap(),
-                    state_ul.deltas.last().unwrap()
-                );
-            }
-        }
-
-        // sort owd's lowest to highest
-        state_dl.deltas.sort_by(|a, b| a.total_cmp(b));
-        state_ul.deltas.sort_by(|a, b| a.total_cmp(b));
-
-        if state_dl.deltas.len() < 5 || state_ul.deltas.len() < 5 {
+        if self.state_dl.deltas.len() < 5 || self.state_ul.deltas.len() < 5 {
             // trigger reselection
             warn!(
                 "Not enough delta values (D: {}, U: {}, need 5), triggering reselection",
-                state_dl.deltas.len(),
-                state_ul.deltas.len()
+                self.state_dl.deltas.len(),
+                self.state_ul.deltas.len()
             );
             let _ = self.reselect_trigger.try_send(true);
         }
@@ -318,8 +340,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
     pub fn new(
         config: Config,
-        owd_baseline: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
-        owd_recent: ArcMutex<HashMap<IpAddr, ReflectorStats>>,
+        control_snapshot_rx: Receiver<ControlSnapshot>,
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
         down_direction: StatsDirection,
@@ -328,8 +349,7 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
     ) -> anyhow::Result<Self> {
         Self::new_with_backends(
             config,
-            owd_baseline,
-            owd_recent,
+            control_snapshot_rx,
             reflectors_lock,
             reselect_trigger,
             down_direction,
@@ -528,5 +548,90 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 lastdump_t = now_t;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::baseliner::{EwmaStats, ReflectorState};
+    use std::collections::HashMap;
+
+    fn reflector_state(
+        baseline_down: f64,
+        baseline_up: f64,
+        recent_down: f64,
+        recent_up: f64,
+        last_receive_at: Instant,
+    ) -> ReflectorState {
+        ReflectorState {
+            baseline: EwmaStats {
+                down: baseline_down,
+                up: baseline_up,
+            },
+            recent: EwmaStats {
+                down: recent_down,
+                up: recent_up,
+            },
+            last_receive_at,
+        }
+    }
+
+    fn snapshot(generated_at: Instant, marker: f64) -> ControlSnapshot {
+        let reflector = "192.0.2.1".parse().unwrap();
+        ControlSnapshot {
+            generated_at,
+            reflectors: HashMap::from([(
+                reflector,
+                reflector_state(marker, marker, marker, marker, generated_at),
+            )]),
+        }
+    }
+
+    #[test]
+    fn drains_queued_snapshots_and_keeps_the_newest() {
+        let start = Instant::now();
+        let newest_at = start + Duration::from_secs(2);
+        let (tx, rx) = flume::unbounded();
+        tx.send(snapshot(start + Duration::from_secs(1), 1.0))
+            .unwrap();
+        tx.send(snapshot(newest_at, 2.0)).unwrap();
+        let mut latest = None;
+
+        drain_latest_snapshot(&rx, &mut latest);
+
+        let latest = latest.unwrap();
+        assert!(rx.is_empty());
+        assert_eq!(latest.generated_at, newest_at);
+        assert_eq!(
+            latest.reflectors[&"192.0.2.1".parse().unwrap()].recent.down,
+            2.0
+        );
+    }
+
+    #[test]
+    fn calculates_sorted_deltas_from_active_fresh_snapshot_state() {
+        let now = Instant::now();
+        let first: IpAddr = "192.0.2.1".parse().unwrap();
+        let second: IpAddr = "192.0.2.2".parse().unwrap();
+        let stale: IpAddr = "192.0.2.3".parse().unwrap();
+        let inactive: IpAddr = "192.0.2.4".parse().unwrap();
+        let snapshot = ControlSnapshot {
+            generated_at: now,
+            reflectors: HashMap::from([
+                (first, reflector_state(10.0, 20.0, 14.0, 28.0, now)),
+                (second, reflector_state(10.0, 20.0, 11.0, 22.0, now)),
+                (
+                    stale,
+                    reflector_state(10.0, 20.0, 110.0, 220.0, now - Duration::from_secs(3)),
+                ),
+                (inactive, reflector_state(10.0, 20.0, 60.0, 80.0, now)),
+            ]),
+        };
+
+        let (down, up) = deltas_from_snapshot(Some(&snapshot), &[first, second, stale], now, 1.0);
+
+        assert_eq!(down, vec![1.0, 4.0]);
+        assert_eq!(up, vec![2.0, 8.0]);
     }
 }
