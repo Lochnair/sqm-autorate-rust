@@ -1,0 +1,3 @@
+[target.x86_64-unknown-freebsd]
+image.name = "ghcr.io/cross-rs/x86_64-unknown-freebsd:local"
+image.toolchain = ["linux/arm64=aarch64-unknown-linux-gnu"]
