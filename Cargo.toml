@@ -20,8 +20,8 @@ strip = "symbols"
 
 [dependencies]
 anyhow = "1.0"
-icmp-socket2 = { version = "0.5.1", features = ["smol"] }
-smol = "1.3"
+icmp-socket2 = { version = "0.5.2", features = ["smol"] }
+smol = "2"
 async-trait = "0.1"
 netlink-bindings = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "0b609e9380610e7da73f8c43cdf804a1d1bf5474", features = ["rt-link", "tc"] }
 netlink-socket2 = { git = "https://github.com/one-d-wide/netlink-bindings.git", rev = "0b609e9380610e7da73f8c43cdf804a1d1bf5474" }
