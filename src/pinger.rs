@@ -8,10 +8,10 @@
 use crate::MeasurementType;
 use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
+use crate::tokio_icmp::AsyncIcmpSocket4;
 use crate::util::{MutexExt, RwLockExt};
 use flume::Sender;
-use icmp_socket2::smol::AsyncIcmpSocket;
-use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
+use icmp_socket2::Icmpv4Packet;
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::io;
@@ -57,9 +57,9 @@ pub type InFlightProbeKey = (IpAddr, MeasurementType, u16);
 pub type InFlightProbeCache = Arc<Mutex<HashMap<InFlightProbeKey, InFlightProbe>>>;
 const INFLIGHT_PROBE_TTL: Duration = Duration::from_secs(30);
 
-fn open_socket(type_: MeasurementType) -> io::Result<IcmpSocket4> {
+fn open_socket(type_: MeasurementType) -> io::Result<AsyncIcmpSocket4> {
     match type_ {
-        MeasurementType::Icmp | MeasurementType::IcmpTimestamps => IcmpSocket4::new(),
+        MeasurementType::Icmp | MeasurementType::IcmpTimestamps => AsyncIcmpSocket4::new(),
         _ => {
             unimplemented!()
         }
@@ -77,7 +77,7 @@ pub trait PingListener {
         stats_tx: Sender<PingReply>,
         ping_metrics: MetricsSender,
     ) -> anyhow::Result<()> {
-        let socket = &mut open_socket(type_)?.into_async()?;
+        let socket = &mut open_socket(type_)?;
         socket.set_timeout(Some(Duration::from_millis(250)));
 
         loop {
@@ -90,7 +90,7 @@ pub trait PingListener {
                 Err(_) => continue,
             };
 
-            let addr: IpAddr = sender.as_socket().unwrap().ip();
+            let addr: IpAddr = sender.ip();
 
             let reflectors = reflectors_lock.read_anyhow()?.clone();
             if !reflectors.contains(&addr) {
@@ -161,7 +161,7 @@ pub trait PingSender {
         inflight: InFlightProbeCache,
         tick_interval: f64,
     ) -> anyhow::Result<()> {
-        let mut socket = open_socket(type_)?.into_async()?;
+        let mut socket = open_socket(type_)?;
 
         let mut seq: u16 = 0;
         let tick_duration = Duration::from_millis((tick_interval * 1000.0) as u64);
@@ -176,7 +176,7 @@ pub trait PingSender {
             let reflectors = { reflectors_lock.read_anyhow()?.clone() };
 
             if reflectors.is_empty() {
-                smol::Timer::after(tick_duration).await;
+                tokio::time::sleep(tick_duration).await;
                 continue;
             }
 
@@ -206,7 +206,7 @@ pub trait PingSender {
                     inflight.lock_anyhow()?.remove(&key);
                     return Err(e.into());
                 }
-                smol::Timer::after(sleep_duration).await;
+                tokio::time::sleep(sleep_duration).await;
             }
 
             seq = seq.wrapping_add(1);

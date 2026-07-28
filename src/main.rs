@@ -18,6 +18,7 @@ mod pinger_icmp_ts;
 mod ratecontroller;
 mod reflector_selector;
 mod time;
+mod tokio_icmp;
 mod util;
 
 use crate::baseliner::{Baseliner, ReflectorStats};
@@ -25,10 +26,13 @@ use crate::metrics::{Metric, Metrics, MetricsSender};
 use ::log::{debug, info};
 use flume::RecvTimeoutError;
 use std::collections::HashMap;
+use std::future::{Future, poll_fn};
 use std::net::IpAddr;
+use std::pin::pin;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::task::Poll;
 use std::thread::sleep;
 use std::time::Duration;
 use std::time::Instant;
@@ -53,6 +57,26 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const RESELECTION_CANDIDATE_BURST: usize = 20;
 const INFLIGHT_CAPACITY_DUPLICATE_FACTOR: usize = 2;
 const INFLIGHT_CAPACITY_MIN: usize = 256;
+
+async fn race<T>(left: impl Future<Output = T>, right: impl Future<Output = T>) -> T {
+    let mut left = pin!(left);
+    let mut right = pin!(right);
+
+    poll_fn(|cx| {
+        if fastrand::bool() {
+            if let Poll::Ready(output) = left.as_mut().poll(cx) {
+                return Poll::Ready(output);
+            }
+            right.as_mut().poll(cx)
+        } else {
+            if let Poll::Ready(output) = right.as_mut().poll(cx) {
+                return Poll::Ready(output);
+            }
+            left.as_mut().poll(cx)
+        }
+    })
+    .await
+}
 
 fn compute_inflight_probe_capacity(
     config: &Config,
@@ -257,26 +281,33 @@ fn main() -> anyhow::Result<()> {
     thread::Builder::new()
         .name("pinger".to_string())
         .spawn(move || {
-            let result = smol::block_on(async {
-                let listener = ping_listener.listen(
-                    id,
-                    measurement_type,
-                    reflector_peers_lock_clone.clone(),
-                    inflight_listener,
-                    baseliner_stats_tx,
-                    ping_metrics,
-                );
-                let sender = ping_sender.send(
-                    id,
-                    measurement_type,
-                    reflector_peers_lock_clone,
-                    inflight_sender,
-                    tick_interval,
-                );
+            let result: anyhow::Result<()> = match tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(async {
+                    let listener = ping_listener.listen(
+                        id,
+                        measurement_type,
+                        reflector_peers_lock_clone.clone(),
+                        inflight_listener,
+                        baseliner_stats_tx,
+                        ping_metrics,
+                    );
+                    let sender = ping_sender.send(
+                        id,
+                        measurement_type,
+                        reflector_peers_lock_clone,
+                        inflight_sender,
+                        tick_interval,
+                    );
 
-                // Returning from the race drops the sibling future, so neither task is detached.
-                smol::future::race(listener, sender).await
-            });
+                    // Returning from the race drops the sibling future, so neither task is detached.
+                    race(listener, sender).await
+                }),
+                Err(error) => Err(error.into()),
+            };
             if let Err(e) = result {
                 let _ = err_tx.send(e);
             }
