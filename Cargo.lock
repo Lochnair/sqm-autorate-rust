@@ -156,9 +156,9 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "icmp-socket2"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e336f10a20e44fdd36ee19a628c1915db2a7c275ce390b12a180c08506625503"
+checksum = "86fc005b72eb9dbc1df87318cf906a415d4f4c0d5eea42849b29dd710cdf670d"
 dependencies = [
  "socket2",
 ]
