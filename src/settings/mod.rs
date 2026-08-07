@@ -12,9 +12,68 @@ use std::str::FromStr;
 use uci_derive::{UciConfig, UciSection};
 
 pub(crate) mod uci_schema;
+mod validation;
 
 #[cfg(all(feature = "uci", unix))]
 use crate::platform::unix::uci::UciSource;
+
+struct FlexiBool(bool);
+
+impl FromStr for FlexiBool {
+    type Err = ConfigError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "y" | "on" | "enabled" => Ok(FlexiBool(true)),
+            "0" | "false" | "no" | "n" | "off" | "disabled" => Ok(FlexiBool(false)),
+            _ => Err(ConfigError::Message(format!(
+                "invalid boolean string: {}",
+                s
+            ))),
+        }
+    }
+}
+
+fn deserialize_flex_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct FlexiBoolVisitor;
+
+    impl<'de> de::Visitor<'de> for FlexiBoolVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a boolean or a UCI-compatible boolean string")
+        }
+
+        fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            value
+                .parse::<FlexiBool>()
+                .map(|value| value.0)
+                .map_err(E::custom)
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    deserializer.deserialize_any(FlexiBoolVisitor)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MeasurementType {
@@ -175,6 +234,7 @@ pub(crate) struct OutputSettings {
     pub(crate) log_level: Level,
     pub(crate) speed_hist_file: String,
     pub(crate) stats_file: String,
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) suppress_statistics: bool,
 }
 
@@ -192,6 +252,7 @@ impl Default for OutputSettings {
 #[derive(Clone, Debug, Deserialize, UciSection)]
 #[serde(default)]
 pub(crate) struct ObservabilitySettings {
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) enabled: bool,
     #[serde(deserialize_with = "deserialize_from_str")]
     pub(crate) protocol: ObservabilityProtocol,
@@ -199,9 +260,13 @@ pub(crate) struct ObservabilitySettings {
     pub(crate) port: u16,
     pub(crate) batch_size: usize,
     pub(crate) batch_timeout_ms: u64,
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) export_ping_metrics: bool,
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) export_rate_metrics: bool,
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) export_baseline_metrics: bool,
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) export_events: bool,
     pub(crate) host_tag: String,
 }
@@ -238,6 +303,7 @@ pub(crate) struct AdvancedSettings {
     pub(crate) speed_hist_size: u32,
     pub(crate) tick_interval: f64,
     pub(crate) upload_delay_ms: f64,
+    #[serde(deserialize_with = "deserialize_flex_bool")]
     pub(crate) dry_run: bool,
 }
 
