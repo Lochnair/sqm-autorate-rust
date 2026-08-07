@@ -17,6 +17,7 @@ mod pinger_icmp_ts;
 mod platform;
 mod ratecontroller;
 mod reflector_selector;
+mod settings;
 mod time;
 mod util;
 
