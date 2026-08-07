@@ -155,24 +155,8 @@ fn install_signal_handlers() {
     }
 }
 
-fn interface_stats_directions(settings: &Settings) -> (StatsDirection, StatsDirection) {
-    let download = if settings.network.download_interface.starts_with("ifb")
-        || settings.network.download_interface.starts_with("veth")
-    {
-        StatsDirection::TX
-    } else {
-        StatsDirection::RX
-    };
-
-    let upload = if settings.network.upload_interface.starts_with("ifb")
-        || settings.network.upload_interface.starts_with("veth")
-    {
-        StatsDirection::RX
-    } else {
-        StatsDirection::TX
-    };
-
-    (download, upload)
+fn interface_stats_directions(_: &Settings) -> (StatsDirection, StatsDirection) {
+    (StatsDirection::RX, StatsDirection::TX)
 }
 
 fn probe_identifier() -> u16 {
