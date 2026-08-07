@@ -11,10 +11,10 @@ pipeline {
 					}
 				}
 
-				agent {
-                    docker {
-                        image "ghcr.io/rust-cross/rust-musl-cross:${TARGET}"
-						alwaysPull true
+                agent {
+                    dockerfile {
+                        filename 'Dockerfile.ci'
+                        additionalBuildArgs "--pull --build-arg TARGET=${TARGET}"
                     }
                 }
 
@@ -25,7 +25,7 @@ pipeline {
 								# 1. Set CARGO_HOME to a writable directory in the workspace
 								export CARGO_HOME="$(pwd)/.cargo"
 								mkdir -p "$CARGO_HOME"
-								
+
 								# 2. Add local bin to PATH (for tools you might install)
 								export PATH="$(pwd)/.local/bin:${PATH}"
 
@@ -44,14 +44,17 @@ pipeline {
 								echo "----------------------------------"
 
 								# 5. Check Toolchain & Build
+								# Force standalone static artifacts across the entire CI matrix.
+								export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
+
                                 # We grep for "nightly" in the version string (e.g., "rustc 1.95.0-nightly...")
                                 if rustc -V | grep -q "nightly"; then
                                     echo "Detected Nightly toolchain. Enabling '-Z build-std' to support panic=abort..."
-                                    
+
                                     # Ensure rust-src is installed (needed for build-std)
                                     # We use '|| true' so it doesn't fail if already installed or network flakes
                                     rustup component add rust-src || true
-                                    
+
                                     cargo build --release -Z build-std=std,panic_abort
                                 else
                                     echo "Detected Stable toolchain. Building with standard pre-compiled library..."
@@ -71,7 +74,7 @@ pipeline {
                                 # 2. Verify it exists
                                 if [ -f "$BINARY_PATH" ]; then
                                     echo "Found compiled binary at: $BINARY_PATH"
-                                    
+
                                     # 3. Rename with the matrix tag (e.g., sqm-autorate-rust-aarch64-musl)
                                     # This ensures unique filenames in the shared workspace root
                                     cp "$BINARY_PATH" "sqm-autorate-rust-${TARGET}"
@@ -82,7 +85,7 @@ pipeline {
                                     exit 1
                                 fi
                             '''
-                            
+
                             // 4. Archive the specific file we just copied
                             archiveArtifacts artifacts: "sqm-autorate-rust-${TARGET}", fingerprint: true, onlyIfSuccessful: true
                         }
