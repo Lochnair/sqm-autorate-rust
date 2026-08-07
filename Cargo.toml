@@ -36,6 +36,8 @@ version = "0.4"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-bindings = { version = "0.3.3", features = ["rt-link", "tc"] }
 netlink-socket2 = { version = "0.3.3" }
+
+[target.'cfg(unix)'.dependencies]
 rust-uci = { git = "https://github.com/namib-project/rust-uci.git", rev = "3e7b6153b6df92b45428c32bb6461756563deecb", optional = true }
 
 [features]

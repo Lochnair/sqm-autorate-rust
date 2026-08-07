@@ -9,6 +9,9 @@ use serde::{Deserialize, Deserializer, de};
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+#[cfg(all(feature = "uci", unix))]
+use crate::platform::unix::uci::UciSource;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MeasurementType {
     Icmp = 1,
@@ -75,6 +78,9 @@ pub(crate) struct Settings {
 impl Settings {
     pub(crate) fn load() -> Result<Self, ConfigError> {
         let builder = Config::builder();
+
+        #[cfg(all(feature = "uci", unix))]
+        let builder = builder.add_source(UciSource::new(["sqm-autorate-rust"]).required(false));
 
         #[cfg(feature = "toml")]
         let builder = builder.add_source(

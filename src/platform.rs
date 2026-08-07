@@ -42,6 +42,9 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(unix)]
+pub mod unix;
+
 #[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
 mod unsupported;
 
