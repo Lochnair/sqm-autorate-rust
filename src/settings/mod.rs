@@ -9,6 +9,9 @@ use serde::{Deserialize, Deserializer, de};
 use std::fmt::{self, Display};
 use std::net::IpAddr;
 use std::str::FromStr;
+use uci_derive::{UciConfig, UciSection};
+
+pub(crate) mod uci_schema;
 
 #[cfg(all(feature = "uci", unix))]
 use crate::platform::unix::uci::UciSource;
@@ -70,17 +73,22 @@ struct ReflectorRecord {
     description: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, UciConfig)]
+#[uci(package = "sqm-autorate-rust")]
 pub(crate) struct Settings {
+    #[uci(section)]
     pub(crate) network: NetworkSettings,
 
     #[serde(default)]
+    #[uci(section)]
     pub(crate) output: OutputSettings,
 
     #[serde(default)]
+    #[uci(section)]
     pub(crate) observability: ObservabilitySettings,
 
     #[serde(default)]
+    #[uci(section)]
     pub(crate) advanced_settings: AdvancedSettings,
 }
 
@@ -89,7 +97,7 @@ impl Settings {
         let builder = Config::builder();
 
         #[cfg(all(feature = "uci", unix))]
-        let builder = builder.add_source(UciSource::new(["sqm-autorate-rust"]).required(false));
+        let builder = builder.add_source(UciSource::from_schema::<Self>().required(false));
 
         #[cfg(feature = "toml")]
         let builder = builder.add_source(
@@ -138,7 +146,7 @@ impl Settings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, UciSection)]
 pub(crate) struct NetworkSettings {
     pub(crate) download_interface: String,
     pub(crate) upload_interface: String,
@@ -160,7 +168,7 @@ impl NetworkSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, UciSection)]
 #[serde(default)]
 pub(crate) struct OutputSettings {
     #[serde(deserialize_with = "deserialize_from_str")]
@@ -181,7 +189,7 @@ impl Default for OutputSettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, UciSection)]
 #[serde(default)]
 pub(crate) struct ObservabilitySettings {
     pub(crate) enabled: bool,
@@ -216,7 +224,7 @@ impl Default for ObservabilitySettings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, UciSection)]
 #[serde(default)]
 pub(crate) struct AdvancedSettings {
     pub(crate) download_delay_ms: f64,

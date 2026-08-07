@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::settings::uci_schema::{UciConfigSchema, UciSectionMapping};
 use config::{ConfigError as SourceError, Map, Source, Value, ValueKind};
 
 use rust_uci::config::{
@@ -16,6 +17,7 @@ enum PackageSelection {
 pub(crate) struct UciSource {
     packages: PackageSelection,
     required: bool,
+    schema: &'static [UciSectionMapping],
     config_dir: Option<PathBuf>,
     save_dir: Option<PathBuf>,
 }
@@ -25,6 +27,7 @@ impl UciSource {
         Self {
             packages,
             required: true,
+            schema: &[],
             config_dir: None,
             save_dir: None,
         }
@@ -47,6 +50,18 @@ impl UciSource {
 
     pub(crate) fn required(mut self, required: bool) -> Self {
         self.required = required;
+        self
+    }
+
+    pub(crate) fn from_schema<T>() -> Self
+    where
+        T: UciConfigSchema,
+    {
+        Self::new([T::UCI_PACKAGE]).with_schema(T::UCI_SECTIONS)
+    }
+
+    pub(crate) fn with_schema(mut self, schema: &'static [UciSectionMapping]) -> Self {
+        self.schema = schema;
         self
     }
 
@@ -84,6 +99,10 @@ impl UciSource {
         Ok(uci.into())
     }
 
+    ///
+    /// Converts a [`SectionSelector`] into a string representation.
+    /// Anonymous sections are converted to `section_type[index]` format,
+    /// because config-rs does not allow @-prefixed section names.
     fn config_selector(selector: &SectionSelector<'_>) -> String {
         match selector {
             SectionSelector::Named(name) => (*name).to_owned(),
@@ -93,6 +112,32 @@ impl UciSource {
                 index,
             } => format!("{section_type}[{index}]"),
         }
+    }
+
+    fn mapped_config_key(
+        &self,
+        selector: &SectionSelector<'_>,
+        uci_option: &str,
+    ) -> Option<String> {
+        let section_type = match selector {
+            SectionSelector::Anonymous {
+                section_type,
+                index,
+            } if *index == 0 => *section_type,
+
+            SectionSelector::Anonymous { .. } | SectionSelector::Named(_) => return None,
+        };
+
+        self.schema
+            .iter()
+            .filter(|section| section.uci_section == section_type)
+            .find_map(|section| {
+                section
+                    .options
+                    .iter()
+                    .find(|option| option.uci_option == uci_option)
+                    .map(|option| format!("{}.{}", section.config_section, option.config_field,))
+            })
     }
 
     fn collect_package(
@@ -127,13 +172,18 @@ impl UciSource {
             for option in options {
                 let option_name = option.name();
 
+                let uci_relative_key = format!("{selector}.{option_name}");
+
                 let config_relative_key =
                     format!("{}.{option_name}", Self::config_selector(&selector),);
 
-                let destination_key = format!("{package_name}.{config_relative_key}");
-
-                let uci_relative_key = format!("{selector}.{option_name}");
                 let uci_key = format!("{package_name}.{uci_relative_key}");
+
+                let source_key = format!("{package_name}.{config_relative_key}");
+
+                let destination_key = self
+                    .mapped_config_key(&selector, option_name)
+                    .unwrap_or(source_key);
 
                 let Some(value) = option.get().map_err(|e| {
                     SourceError::Message(format!(
