@@ -5,10 +5,10 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::Config;
 use crate::SHUTDOWN;
 use crate::baseliner::ControlSnapshot;
 use crate::metrics::{Metric, MetricsSender};
+use crate::settings::Settings;
 use crate::util::RwLockExt;
 use flume::{Receiver, RecvError, RecvTimeoutError, Selector};
 use log::{debug, info};
@@ -105,7 +105,7 @@ fn recent_rtt_for_peer(snapshot: Option<&ControlSnapshot>, peer: &IpAddr) -> Opt
 }
 
 pub struct ReflectorSelector {
-    pub config: Config,
+    pub settings: Settings,
     pub snapshot_rx: Receiver<ControlSnapshot>,
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
     pub reflector_pool: Vec<IpAddr>,
@@ -118,8 +118,9 @@ impl ReflectorSelector {
         let mut selector_sleep_time = Duration::new(30, 0);
         let mut reselection_count = 0;
         let mut latest_snapshot = None;
-        let baseline_sleep_time =
-            Duration::from_secs_f64(self.config.tick_interval * std::f64::consts::PI);
+        let baseline_sleep_time = Duration::from_secs_f64(
+            self.settings.advanced_settings.tick_interval * std::f64::consts::PI,
+        );
         // Initial wait of several seconds to allow some OWD data to build up
         receive_snapshots_until(
             &self.snapshot_rx,
@@ -157,7 +158,10 @@ impl ReflectorSelector {
 
             // After 40 reselections, slow down to every 15 minutes
             if reselection_count > 40 {
-                selector_sleep_time = Duration::new(self.config.peer_reselection_time * 60, 0);
+                selector_sleep_time = Duration::new(
+                    self.settings.advanced_settings.peer_reselection_time * 60,
+                    0,
+                );
             }
 
             let mut next_peers: Vec<IpAddr> = Vec::new();
@@ -216,7 +220,7 @@ impl ReflectorSelector {
             candidates.sort_by(|a, b| a.1.cmp(&b.1));
 
             // Now we will just limit the candidates down to 2 * num_reflectors
-            let mut num_reflectors = self.config.num_reflectors;
+            let mut num_reflectors = self.settings.advanced_settings.num_reflectors;
             let candidate_pool_num = (2 * num_reflectors) as usize;
             candidates.truncate(candidate_pool_num);
 

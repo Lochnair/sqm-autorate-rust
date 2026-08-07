@@ -5,7 +5,6 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::Config;
 use crate::SHUTDOWN;
 use crate::baseliner::ControlSnapshot;
 use crate::metrics::{Metric, MetricsSender};
@@ -13,6 +12,7 @@ use crate::platform::{
     InterfaceStatsProvider, PlatformInterfaceStats, PlatformTrafficControl, TrafficControlBackend,
     interface_stats_provider, traffic_control_backend,
 };
+use crate::settings::Settings;
 use crate::time::Time;
 use crate::util::{ArcRwLock, RwLockExt};
 use flume::{Receiver, Sender};
@@ -157,7 +157,7 @@ fn deltas_from_snapshot(
 }
 
 pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
-    config: Config,
+    settings: Settings,
     control_snapshot: Option<ControlSnapshot>,
     control_snapshot_rx: Receiver<ControlSnapshot>,
     down_direction: StatsDirection,
@@ -173,7 +173,7 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
 
 impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     fn new_with_backends(
-        config: Config,
+        settings: Settings,
         control_snapshot_rx: Receiver<ControlSnapshot>,
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
@@ -183,23 +183,28 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         mut stats_provider: S,
         mut traffic_control: T,
     ) -> anyhow::Result<Self> {
-        let dl_shaper = traffic_control.find_shaper(config.download_interface.as_str())?;
-        let dl_safe_rates =
-            generate_initial_speeds(config.download_base_kbits, config.speed_hist_size);
-        let ul_shaper = traffic_control.find_shaper(config.upload_interface.as_str())?;
-        let ul_safe_rates =
-            generate_initial_speeds(config.upload_base_kbits, config.speed_hist_size);
+        let dl_shaper =
+            traffic_control.find_shaper(settings.network.download_interface.as_str())?;
+        let dl_safe_rates = generate_initial_speeds(
+            settings.network.download_base_kbits,
+            settings.advanced_settings.speed_hist_size,
+        );
+        let ul_shaper = traffic_control.find_shaper(settings.network.upload_interface.as_str())?;
+        let ul_safe_rates = generate_initial_speeds(
+            settings.network.upload_base_kbits,
+            settings.advanced_settings.speed_hist_size,
+        );
 
         let (cur_rx, cur_tx) = get_interface_stats(
             &mut stats_provider,
-            &config.download_interface,
-            &config.upload_interface,
+            &settings.network.download_interface,
+            &settings.network.upload_interface,
             down_direction,
             up_direction,
         )?;
 
         Ok(Self {
-            config,
+            settings,
             control_snapshot: None,
             control_snapshot_rx,
             down_direction,
@@ -216,18 +221,18 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
     fn request_initial_rates(&mut self) -> anyhow::Result<()> {
         // Set rates to 60% of base rate to make sure we start with sane baselines.
-        self.state_dl.current_rate = self.config.download_base_kbits * 0.6;
-        self.state_ul.current_rate = self.config.upload_base_kbits * 0.6;
+        self.state_dl.current_rate = self.settings.network.download_base_kbits * 0.6;
+        self.state_ul.current_rate = self.settings.network.upload_base_kbits * 0.6;
 
         self.traffic_control.set_rate(
             &self.state_dl.shaper,
             self.state_dl.current_rate.round() as u64,
-            self.config.dry_run,
+            self.settings.advanced_settings.dry_run,
         )?;
         self.traffic_control.set_rate(
             &self.state_ul.shaper,
             self.state_ul.current_rate.round() as u64,
-            self.config.dry_run,
+            self.settings.advanced_settings.dry_run,
         )?;
 
         Ok(())
@@ -236,16 +241,16 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     fn calculate_rate(&mut self, direction: Direction) -> anyhow::Result<()> {
         let (base_rate, delay_ms, min_rate, state) = if direction == Direction::Down {
             (
-                self.config.download_base_kbits,
-                self.config.download_delay_ms,
-                self.config.download_min_kbits,
+                self.settings.network.download_base_kbits,
+                self.settings.advanced_settings.download_delay_ms,
+                self.settings.network.download_min_kbits(),
                 &mut self.state_dl,
             )
         } else {
             (
-                self.config.upload_base_kbits,
-                self.config.upload_delay_ms,
-                self.config.upload_min_kbits,
+                self.settings.network.upload_base_kbits,
+                self.settings.advanced_settings.upload_delay_ms,
+                self.settings.network.upload_min_kbits(),
                 &mut self.state_ul,
             )
         };
@@ -273,7 +278,9 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     / dur.as_secs_f64();
                 state.load = state.utilisation / state.current_rate;
 
-                if state.delta_stat < delay_ms && state.load > self.config.high_load_level {
+                if state.delta_stat < delay_ms
+                    && state.load > self.settings.advanced_settings.high_load_level
+                {
                     state.safe_rates[state.nrate] = (state.current_rate * state.load).floor();
                     let max_rate = state
                         .safe_rates
@@ -284,7 +291,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                         * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
                         + (base_rate * 0.03);
                     state.nrate += 1;
-                    state.nrate %= self.config.speed_hist_size as usize;
+                    state.nrate %= self.settings.advanced_settings.speed_hist_size as usize;
                 }
 
                 if state.delta_stat > delay_ms {
@@ -318,7 +325,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
             self.control_snapshot.as_ref(),
             &reflectors,
             now_t,
-            self.config.tick_interval,
+            self.settings.advanced_settings.tick_interval,
         );
         self.state_dl.deltas = down_deltas;
         self.state_ul.deltas = up_deltas;
@@ -339,7 +346,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
 impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
     pub fn new(
-        config: Config,
+        settings: Settings,
         control_snapshot_rx: Receiver<ControlSnapshot>,
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
@@ -348,7 +355,7 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
         metrics: MetricsSender,
     ) -> anyhow::Result<Self> {
         Self::new_with_backends(
-            config,
+            settings,
             control_snapshot_rx,
             reflectors_lock,
             reselect_trigger,
@@ -363,7 +370,8 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
 
 impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     pub fn run(&mut self) -> anyhow::Result<()> {
-        let sleep_time = Duration::from_secs_f64(self.config.min_change_interval);
+        let sleep_time =
+            Duration::from_secs_f64(self.settings.advanced_settings.min_change_interval);
 
         let mut lastchg_t = Instant::now();
         let mut lastdump_t = Instant::now();
@@ -375,12 +383,12 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         let mut stats_fd: Option<File> = None;
         let mut stats_fd_inner: File;
 
-        if !self.config.suppress_statistics {
+        if !self.settings.output.suppress_statistics {
             speed_hist_fd_inner = File::options()
                 .create(true)
                 .write(true)
                 .truncate(true)
-                .open(self.config.speed_hist_file.as_str())?;
+                .open(self.settings.output.speed_hist_file.as_str())?;
 
             speed_hist_fd_inner.write_all("time,counter,upspeed,downspeed\n".as_bytes())?;
             speed_hist_fd_inner.flush()?;
@@ -391,7 +399,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 .create(true)
                 .write(true)
                 .truncate(true)
-                .open(self.config.stats_file.as_str())?;
+                .open(self.settings.output.stats_file.as_str())?;
 
             stats_fd_inner.write_all(
                 "times,timens,rxload,txload,deltadelaydown,deltadelayup,dlrate,uprate\n".as_bytes(),
@@ -409,14 +417,16 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
             sleep(sleep_time);
             let now_t = Instant::now();
 
-            if now_t.duration_since(lastchg_t).as_secs_f64() > self.config.min_change_interval {
+            if now_t.duration_since(lastchg_t).as_secs_f64()
+                > self.settings.advanced_settings.min_change_interval
+            {
                 // if it's been long enough, and the stats indicate needing to change speeds
                 // change speeds here
 
                 (self.state_dl.current_bytes, self.state_ul.current_bytes) = get_interface_stats(
                     &mut self.stats_provider,
-                    &self.config.download_interface,
-                    &self.config.upload_interface,
+                    &self.settings.network.download_interface,
+                    &self.settings.network.upload_interface,
                     self.down_direction,
                     self.up_direction,
                 )?;
@@ -430,18 +440,18 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                         reflector: None,
                         tags: &[],
                     });
-                    self.state_dl.next_rate = self.config.download_min_kbits;
-                    self.state_ul.next_rate = self.config.upload_min_kbits;
+                    self.state_dl.next_rate = self.settings.network.download_min_kbits();
+                    self.state_ul.next_rate = self.settings.network.upload_min_kbits();
 
                     self.traffic_control.set_rate(
                         &self.state_dl.shaper,
                         self.state_dl.next_rate as u64,
-                        self.config.dry_run,
+                        self.settings.advanced_settings.dry_run,
                     )?;
                     self.traffic_control.set_rate(
                         &self.state_ul.shaper,
                         self.state_ul.next_rate as u64,
-                        self.config.dry_run,
+                        self.settings.advanced_settings.dry_run,
                     )?;
 
                     self.state_dl.current_rate = self.state_dl.next_rate;
@@ -465,7 +475,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     self.traffic_control.set_rate(
                         &self.state_dl.shaper,
                         self.state_dl.next_rate as u64,
-                        self.config.dry_run,
+                        self.settings.advanced_settings.dry_run,
                     )?;
                 }
 
@@ -473,7 +483,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     self.traffic_control.set_rate(
                         &self.state_ul.shaper,
                         self.state_ul.next_rate as u64,
-                        self.config.dry_run,
+                        self.settings.advanced_settings.dry_run,
                     )?;
                 }
 
@@ -529,7 +539,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
             if let Some(ref mut fd) = speed_hist_fd
                 && now_t.duration_since(lastdump_t).as_secs_f64() > 300.0
             {
-                for i in 0..self.config.speed_hist_size as usize {
+                for i in 0..self.settings.advanced_settings.speed_hist_size as usize {
                     let hist_time = Time::new(ClockId::Realtime);
                     if let Err(e) = fd.write_all(
                         format!(

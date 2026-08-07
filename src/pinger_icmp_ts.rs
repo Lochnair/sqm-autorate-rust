@@ -5,8 +5,8 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::config::MeasurementType;
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
+use crate::settings::MeasurementType;
 use crate::time::Time;
 use icmp_socket2::Icmpv4Message;
 use icmp_socket2::Icmpv4Packet;

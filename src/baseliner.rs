@@ -5,10 +5,10 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::Config;
 use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
+use crate::settings::Settings;
 use flume::{Receiver, Sender};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -70,7 +70,7 @@ pub struct ControlSnapshot {
 }
 
 pub struct Baseliner {
-    pub config: Config,
+    pub settings: Settings,
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
     pub stats_rx: Receiver<PingReply>,
@@ -150,8 +150,14 @@ impl Baseliner {
     pub fn run(&self) -> anyhow::Result<()> {
         let mut reflectors = HashMap::<IpAddr, ReflectorState>::new();
 
-        let slow_factor = ewma_factor(self.config.tick_interval, BASELINE_HALF_LIFE_SECS);
-        let fast_factor = ewma_factor(self.config.tick_interval, RECENT_HALF_LIFE_SECS);
+        let slow_factor = ewma_factor(
+            self.settings.advanced_settings.tick_interval,
+            BASELINE_HALF_LIFE_SECS,
+        );
+        let fast_factor = ewma_factor(
+            self.settings.advanced_settings.tick_interval,
+            RECENT_HALF_LIFE_SECS,
+        );
 
         loop {
             if SHUTDOWN.load(Ordering::Relaxed) {
@@ -212,7 +218,7 @@ impl Baseliner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MeasurementType;
+    use crate::settings::MeasurementType;
     use std::time::Duration;
 
     fn state(
