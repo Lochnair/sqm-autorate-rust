@@ -8,7 +8,6 @@
 extern crate core;
 
 mod baseliner;
-mod config;
 mod log;
 mod metrics;
 mod pinger;
@@ -17,11 +16,20 @@ mod pinger_icmp_ts;
 mod platform;
 mod ratecontroller;
 mod reflector_selector;
+mod settings;
 mod time;
 mod util;
 
 use crate::baseliner::Baseliner;
 use crate::metrics::{Metric, Metrics, MetricsSender};
+use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
+use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
+use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
+use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
+use crate::ratecontroller::{Ratecontroller, StatsDirection};
+use crate::reflector_selector::ReflectorSelector;
+use crate::settings::MeasurementType;
+use crate::settings::Settings;
 use ::log::{debug, info, warn};
 use flume::RecvTimeoutError;
 use std::collections::HashMap;
@@ -32,14 +40,6 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use std::{process, thread};
-
-use crate::config::{Config, MeasurementType};
-use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
-use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
-use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
-use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
-use crate::ratecontroller::{Ratecontroller, StatsDirection};
-use crate::reflector_selector::ReflectorSelector;
 
 struct ReflectorSetup {
     peers: Arc<RwLock<Vec<IpAddr>>>,
@@ -63,12 +63,14 @@ const INFLIGHT_CAPACITY_DUPLICATE_FACTOR: usize = 2;
 const INFLIGHT_CAPACITY_MIN: usize = 256;
 
 fn compute_inflight_probe_capacity(
-    config: &Config,
+    settings: &Settings,
     active_reflector_count: usize,
     reselection_enabled: bool,
 ) -> usize {
-    let tick_interval_ms = (config.tick_interval * 1000.0).max(1.0);
-    let expected_path_delay_ms = (config.download_delay_ms + config.upload_delay_ms).max(10.0);
+    let tick_interval_ms = (settings.advanced_settings.tick_interval * 1000.0).max(1.0);
+    let expected_path_delay_ms = (settings.advanced_settings.download_delay_ms
+        + settings.advanced_settings.upload_delay_ms)
+        .max(10.0);
     // Keep enough room for severe queueing events while still adapting to configured delay budgets.
     let max_rtt_ms = (expected_path_delay_ms * 20.0).clamp(1000.0, 10000.0);
 
@@ -99,27 +101,36 @@ fn create_pinger(measurement_type: MeasurementType) -> (PingListenerBox, PingSen
 }
 
 fn initialize_shaper<T: TrafficControlBackend>(
-    config: &Config,
+    settings: &Settings,
     traffic_control: &mut T,
 ) -> anyhow::Result<(T::Handle, T::Handle)> {
-    initialize_shaper_with_settle_time(config, traffic_control, Duration::from_secs(2))
+    initialize_shaper_with_settle_time(settings, traffic_control, Duration::from_secs(2))
 }
 
 fn initialize_shaper_with_settle_time<T: TrafficControlBackend>(
-    config: &Config,
+    settings: &Settings,
     traffic_control: &mut T,
     settle_time: Duration,
 ) -> anyhow::Result<(T::Handle, T::Handle)> {
-    let down = traffic_control.find_shaper(&config.download_interface)?;
-    let up = traffic_control.find_shaper(&config.upload_interface)?;
+    let down = traffic_control.find_shaper(&settings.network.download_interface)?;
+    let up = traffic_control.find_shaper(&settings.network.upload_interface)?;
 
     info!(
         "Requesting minimum shaper rates (D/U): {} / {}",
-        config.download_min_kbits, config.upload_min_kbits,
+        settings.network.download_min_kbits(),
+        settings.network.upload_min_kbits(),
     );
 
-    traffic_control.set_rate(&down, config.download_min_kbits as u64, config.dry_run)?;
-    traffic_control.set_rate(&up, config.upload_min_kbits as u64, config.dry_run)?;
+    traffic_control.set_rate(
+        &down,
+        settings.network.download_min_kbits() as u64,
+        settings.advanced_settings.dry_run,
+    )?;
+    traffic_control.set_rate(
+        &up,
+        settings.network.upload_min_kbits() as u64,
+        settings.advanced_settings.dry_run,
+    )?;
 
     info!(
         "Sleeping for {} seconds to give the shaper a chance to control existing bloat",
@@ -144,24 +155,8 @@ fn install_signal_handlers() {
     }
 }
 
-fn interface_stats_directions(config: &Config) -> (StatsDirection, StatsDirection) {
-    let download = if config.download_interface.starts_with("ifb")
-        || config.download_interface.starts_with("veth")
-    {
-        StatsDirection::TX
-    } else {
-        StatsDirection::RX
-    };
-
-    let upload = if config.upload_interface.starts_with("ifb")
-        || config.upload_interface.starts_with("veth")
-    {
-        StatsDirection::RX
-    } else {
-        StatsDirection::TX
-    };
-
-    (download, upload)
+fn interface_stats_directions(_: &Settings) -> (StatsDirection, StatsDirection) {
+    (StatsDirection::RX, StatsDirection::TX)
 }
 
 fn probe_identifier() -> u16 {
@@ -170,31 +165,35 @@ fn probe_identifier() -> u16 {
 }
 
 fn restore_shaper<T: TrafficControlBackend>(
-    config: &Config,
+    settings: &Settings,
     traffic_control: &mut T,
     down: &T::Handle,
     up: &T::Handle,
 ) {
     info!(
         "Requesting restoration to base shaper rates (D/U): {} / {}",
-        config.download_base_kbits, config.upload_base_kbits,
+        settings.network.download_base_kbits, settings.network.upload_base_kbits,
     );
 
-    if let Err(error) =
-        traffic_control.set_rate(down, config.download_base_kbits as u64, config.dry_run)
-    {
+    if let Err(error) = traffic_control.set_rate(
+        down,
+        settings.network.download_base_kbits as u64,
+        settings.advanced_settings.dry_run,
+    ) {
         warn!("Failed to restore download shaper rate: {error}");
     }
 
-    if let Err(error) =
-        traffic_control.set_rate(up, config.upload_base_kbits as u64, config.dry_run)
-    {
+    if let Err(error) = traffic_control.set_rate(
+        up,
+        settings.network.upload_base_kbits as u64,
+        settings.advanced_settings.dry_run,
+    ) {
         warn!("Failed to restore upload shaper rate: {error}");
     }
 }
 
-fn setup_reflectors(config: &Config) -> anyhow::Result<ReflectorSetup> {
-    let configured = config.load_reflectors()?;
+fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
+    let configured = settings.load_reflectors()?;
     let configured_count = configured.len();
 
     let default_reflectors = [
@@ -206,7 +205,7 @@ fn setup_reflectors(config: &Config) -> anyhow::Result<ReflectorSetup> {
         IpAddr::from_str("94.140.14.14")?,
     ];
 
-    let reselection_enabled = configured_count > config.num_reflectors as usize;
+    let reselection_enabled = configured_count > settings.advanced_settings.num_reflectors as usize;
     let pool = if reselection_enabled {
         configured
     } else {
@@ -217,7 +216,9 @@ fn setup_reflectors(config: &Config) -> anyhow::Result<ReflectorSetup> {
         peers: Arc::new(RwLock::new(default_reflectors.to_vec())),
         pool,
         reselection_enabled,
-        active_count: default_reflectors.len().max(config.num_reflectors as usize),
+        active_count: default_reflectors
+            .len()
+            .max(settings.advanced_settings.num_reflectors as usize),
     })
 }
 
@@ -240,8 +241,8 @@ fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()
     }
 }
 
-fn run(config: Config) -> anyhow::Result<()> {
-    if config.dry_run {
+fn run(settings: &Settings) -> anyhow::Result<()> {
+    if settings.advanced_settings.dry_run {
         info!("*** MONITORING MODE ACTIVE — qdisc rates will NOT be changed ***");
     }
 
@@ -253,7 +254,7 @@ fn run(config: Config) -> anyhow::Result<()> {
         pool: reflector_pool,
         reselection_enabled,
         active_count: active_reflector_count,
-    } = setup_reflectors(&config)?;
+    } = setup_reflectors(settings)?;
 
     let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
     let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
@@ -268,10 +269,10 @@ fn run(config: Config) -> anyhow::Result<()> {
 
     let dropped = Arc::new(AtomicU32::new(0));
 
-    let (metrics_tx, metrics_thread_handle) = if config.observability_enabled {
+    let (metrics_tx, metrics_thread_handle) = if settings.observability.enabled {
         let (tx, rx) = flume::bounded(1000);
         let metrics = Metrics {
-            config: config.clone(),
+            settings: settings.clone(),
             metrics_rx: rx,
             metrics_dropped: Arc::clone(&dropped),
         };
@@ -296,36 +297,40 @@ fn run(config: Config) -> anyhow::Result<()> {
             .unwrap_or_else(MetricsSender::disabled)
     };
 
-    let ping_metrics = make_sender(config.observability_export_ping_metrics);
-    let baseline_metrics = make_sender(config.observability_export_baseline_metrics);
-    let event_metrics = make_sender(config.observability_export_events);
-    let rate_metrics = make_sender(config.observability_export_rate_metrics);
+    let ping_metrics = make_sender(settings.observability.export_ping_metrics);
+    let baseline_metrics = make_sender(settings.observability.export_baseline_metrics);
+    let event_metrics = make_sender(settings.observability.export_events);
+    let rate_metrics = make_sender(settings.observability.export_rate_metrics);
 
     event_metrics.send(Metric::Event {
         name: "starting",
         reason: "",
         reflector: None,
-        tags: if config.dry_run {
+        tags: if settings.advanced_settings.dry_run {
             &[("dry_run", "true")]
         } else {
             &[]
         },
     });
 
-    let (mut ping_listener, mut ping_sender) = create_pinger(config.measurement_type);
+    let (mut ping_listener, mut ping_sender) =
+        create_pinger(settings.advanced_settings.measurement_type);
 
     let inflight_probe_capacity =
-        compute_inflight_probe_capacity(&config, active_reflector_count, reselection_enabled);
+        compute_inflight_probe_capacity(settings, active_reflector_count, reselection_enabled);
     info!(
         "In-flight probe cache capacity: {} (active_reflectors={}, reselection_enabled={}, tick_interval_s={})",
-        inflight_probe_capacity, active_reflector_count, reselection_enabled, config.tick_interval
+        inflight_probe_capacity,
+        active_reflector_count,
+        reselection_enabled,
+        settings.advanced_settings.tick_interval
     );
 
     let inflight: InFlightProbeCache =
         Arc::new(Mutex::new(HashMap::with_capacity(inflight_probe_capacity)));
 
     let baseliner = Baseliner {
-        config: config.clone(),
+        settings: settings.clone(),
         reselect_trigger: reselect_tx.clone(),
         start_time,
         stats_rx: baseliner_stats_rx,
@@ -336,12 +341,12 @@ fn run(config: Config) -> anyhow::Result<()> {
     };
 
     let mut main_traffic_control = traffic_control_backend();
-    let (down_shaper, up_shaper) = initialize_shaper(&config, &mut main_traffic_control)?;
+    let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
 
     let err_tx = error_tx.clone();
     let listener_peers = Arc::clone(&reflector_peers);
     let listener_inflight = Arc::clone(&inflight);
-    let measurement_type = config.measurement_type;
+    let measurement_type = settings.advanced_settings.measurement_type;
     thread::Builder::new()
         .name("receiver".to_string())
         .spawn(move || {
@@ -369,8 +374,8 @@ fn run(config: Config) -> anyhow::Result<()> {
     let err_tx = error_tx.clone();
     let sender_peers = Arc::clone(&reflector_peers);
     let sender_inflight = Arc::clone(&inflight);
-    let measurement_type = config.measurement_type;
-    let tick_interval = config.tick_interval;
+    let measurement_type = settings.advanced_settings.measurement_type;
+    let tick_interval = settings.advanced_settings.tick_interval;
     thread::Builder::new()
         .name("sender".to_string())
         .spawn(move || {
@@ -389,7 +394,7 @@ fn run(config: Config) -> anyhow::Result<()> {
 
     if reselection_enabled {
         let reflector_selector = ReflectorSelector {
-            config: config.clone(),
+            settings: settings.clone(),
             snapshot_rx: selection_snapshot_rx
                 .expect("reselection snapshot receiver must exist when reselection is enabled"),
             reflector_peers_lock: Arc::clone(&reflector_peers),
@@ -410,19 +415,19 @@ fn run(config: Config) -> anyhow::Result<()> {
     // Give the baseliner time to collect initial samples before adjusting rates.
     sleep(Duration::from_secs(10));
 
-    let (dl_direction, ul_direction) = interface_stats_directions(&config);
+    let (dl_direction, ul_direction) = interface_stats_directions(settings);
 
     debug!(
         "Download direction: {}:{:?}",
-        config.download_interface, dl_direction
+        settings.network.download_interface, dl_direction
     );
     debug!(
         "Upload direction: {}:{:?}",
-        config.upload_interface, ul_direction
+        settings.network.upload_interface, ul_direction
     );
 
     let mut ratecontroller = Ratecontroller::new(
-        config.clone(),
+        settings.clone(),
         control_snapshot_rx,
         reflector_peers,
         reselect_tx,
@@ -465,7 +470,12 @@ fn run(config: Config) -> anyhow::Result<()> {
         let _ = handle.join();
     }
 
-    restore_shaper(&config, &mut main_traffic_control, &down_shaper, &up_shaper);
+    restore_shaper(
+        settings,
+        &mut main_traffic_control,
+        &down_shaper,
+        &up_shaper,
+    );
 
     result
 }
@@ -475,9 +485,11 @@ fn main() -> anyhow::Result<()> {
 
     install_signal_handlers();
 
-    let config = Config::new()?;
-    log::init(config.log_level)?;
+    let settings = Settings::load()?;
+    settings.validate()?;
+
+    log::init(settings.output.log_level)?;
     warn_platform_limitations();
 
-    run(config)
+    run(&settings)
 }

@@ -7,8 +7,8 @@ fn main() {
 
     if uci_enabled && target_os != "linux" {
         println!(
-            "cargo::warning=feature `uci` is unsupported for target `{target}`; \
-             UCI integration will not be compiled"
+            "cargo:warning=UCI support on {target} is intended for development \
+             and testing; Linux/OpenWrt remains the production-supported platform"
         );
     }
 

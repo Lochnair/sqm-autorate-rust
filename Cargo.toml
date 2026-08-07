@@ -26,6 +26,10 @@ rustix = { version = "1.1", features = ["fs", "system", "thread", "time"] }
 thiserror = "2.0"
 libc = "0.2"
 flume = { version = "0.12.0",  default-features = false, features = ["eventual-fairness", "select"] }
+config = { version = "0.15.25", default-features = false }
+csv = "1.4.0"
+serde = { version = "1", features = ["derive"] }
+uci-derive = { path = "crates/uci-derive" }
 
 [dependencies.log]
 features = ["std"]
@@ -34,7 +38,16 @@ version = "0.4"
 [target.'cfg(target_os = "linux")'.dependencies]
 netlink-bindings = { version = "0.3.3", features = ["rt-link", "tc"] }
 netlink-socket2 = { version = "0.3.3" }
-rust-uci = { git = "https://github.com/namib-project/rust-uci.git", rev = "3e7b6153b6df92b45428c32bb6461756563deecb", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "fcfedd204fb76928ef617bf9631b041c816e03d4", optional = true, default-features = false, }
 
 [features]
+default = ["toml", "uci-vendored"]
+toml = ["config/toml"]
 uci = ["dep:rust-uci"]
+uci-vendored = ["uci", "rust-uci/vendored"]
+
+[workspace]
+members = ["crates/uci-derive"]
+resolver = "3"

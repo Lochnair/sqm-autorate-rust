@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::Config;
-use crate::config::{MeasurementType, ObservabilityProtocol};
+use crate::settings::Settings;
+use crate::settings::{MeasurementType, ObservabilityProtocol};
 use crate::time::Time;
 use flume::{Receiver, RecvTimeoutError, Sender};
 use log::{error, info, warn};
@@ -157,14 +157,14 @@ impl MetricsSender {
 }
 
 pub struct Metrics {
-    pub config: Config,
+    pub settings: Settings,
     pub metrics_dropped: Arc<AtomicU32>,
     pub metrics_rx: Receiver<(Metric, u64)>,
 }
 
 impl Metrics {
     pub fn run(self) -> anyhow::Result<()> {
-        let host = match &self.config.observability_host {
+        let host = match &self.settings.observability.host {
             Some(h) => h.clone(),
             None => {
                 error!("Observability host not configured - metrics exporter disabled");
@@ -172,12 +172,12 @@ impl Metrics {
             }
         };
 
-        let port = self.config.observability_port;
-        let batch_size = self.config.observability_batch_size;
-        let timeout = Duration::from_millis(self.config.observability_batch_timeout_ms);
-        let host_tag = &self.config.observability_host_tag.clone();
+        let port = self.settings.observability.port;
+        let batch_size = self.settings.observability.batch_size;
+        let timeout = Duration::from_millis(self.settings.observability.batch_timeout_ms);
+        let host_tag = &self.settings.observability.host_tag.clone();
 
-        let mut transport = match self.config.observability_protocol {
+        let mut transport = match self.settings.observability.protocol {
             ObservabilityProtocol::Udp => {
                 info!("Metrics exporter configured for UDP to {}:{}", host, port);
                 Transport::new_udp(&host, port)?

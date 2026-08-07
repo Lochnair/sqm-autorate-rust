@@ -1,0 +1,7 @@
+ARG TARGET
+
+FROM ghcr.io/rust-cross/rust-musl-cross:${TARGET}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config \
+    && rm -rf /var/lib/apt/lists/*
