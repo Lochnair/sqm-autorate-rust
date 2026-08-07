@@ -7,6 +7,7 @@ use config::{Config, ConfigError, Environment};
 use log::Level;
 use serde::{Deserialize, Deserializer, de};
 use std::fmt::{self, Display};
+use std::net::IpAddr;
 use std::str::FromStr;
 
 #[cfg(all(feature = "uci", unix))]
@@ -61,6 +62,14 @@ impl FromStr for ObservabilityProtocol {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ReflectorRecord {
+    reflector_ip: IpAddr,
+    ip_version: u8,
+    #[allow(dead_code)]
+    description: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Settings {
     pub(crate) network: NetworkSettings,
@@ -91,6 +100,41 @@ impl Settings {
         let built_config = builder.build()?;
 
         built_config.try_deserialize()
+    }
+
+    pub fn load_reflectors(&self) -> anyhow::Result<Vec<IpAddr>> {
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .trim(csv::Trim::All)
+            .from_path(&self.advanced_settings.reflector_list_file)
+            .with_context(|| {
+                format!(
+                    "failed to open reflector list: {}",
+                    self.advanced_settings.reflector_list_file
+                )
+            })?;
+
+        let mut reflectors = Vec::with_capacity(50);
+
+        for record in reader.deserialize::<ReflectorRecord>() {
+            let record = record.with_context(|| {
+                format!(
+                    "failed to parse reflector list: {}",
+                    self.advanced_settings.reflector_list_file
+                )
+            })?;
+
+            match (record.ip_version, record.reflector_ip) {
+                (4, IpAddr::V4(_)) | (6, IpAddr::V6(_)) => {}
+                (version, address) => {
+                    bail!("reflector {address} has inconsistent IP version {version}");
+                }
+            }
+
+            reflectors.push(record.reflector_ip);
+        }
+
+        Ok(reflectors)
     }
 }
 
