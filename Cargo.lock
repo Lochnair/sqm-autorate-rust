@@ -213,9 +213,10 @@ dependencies = [
 [[package]]
 name = "libuci-sys"
 version = "1.1.0"
-source = "git+https://github.com/namib-project/rust-uci.git?rev=3e7b6153b6df92b45428c32bb6461756563deecb#3e7b6153b6df92b45428c32bb6461756563deecb"
+source = "git+https://github.com/Lochnair/rust-uci.git?rev=fcfedd204fb76928ef617bf9631b041c816e03d4#fcfedd204fb76928ef617bf9631b041c816e03d4"
 dependencies = [
  "bindgen",
+ "cc",
  "cmake",
 ]
 
@@ -368,7 +369,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rust-uci"
 version = "0.1.6"
-source = "git+https://github.com/namib-project/rust-uci.git?rev=3e7b6153b6df92b45428c32bb6461756563deecb#3e7b6153b6df92b45428c32bb6461756563deecb"
+source = "git+https://github.com/Lochnair/rust-uci.git?rev=fcfedd204fb76928ef617bf9631b041c816e03d4#fcfedd204fb76928ef617bf9631b041c816e03d4"
 dependencies = [
  "libc",
  "libuci-sys",
