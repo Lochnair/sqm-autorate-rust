@@ -31,12 +31,6 @@ enum Direction {
     Up,
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum StatsDirection {
-    RX,
-    TX,
-}
-
 fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
     let mut rates = Vec::new();
 
@@ -49,25 +43,11 @@ fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
 
 fn get_interface_stats<S: InterfaceStatsProvider>(
     stats_provider: &mut S,
-    download_interface: &str,
     upload_interface: &str,
-    down_direction: StatsDirection,
-    up_direction: StatsDirection,
 ) -> Result<(i128, i128), S::Error> {
-    let down = stats_provider.read_stats(download_interface)?;
-    let up = stats_provider.read_stats(upload_interface)?;
+    let stats = stats_provider.read_stats(upload_interface)?;
 
-    let rx_bytes = match down_direction {
-        StatsDirection::RX => down.rx_bytes,
-        StatsDirection::TX => down.tx_bytes,
-    };
-
-    let tx_bytes = match up_direction {
-        StatsDirection::RX => up.rx_bytes,
-        StatsDirection::TX => up.tx_bytes,
-    };
-
-    Ok((rx_bytes.into(), tx_bytes.into()))
+    Ok((stats.rx_bytes.into(), stats.tx_bytes.into()))
 }
 
 #[derive(Clone, Debug)]
@@ -160,14 +140,12 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
     settings: Settings,
     control_snapshot: Option<ControlSnapshot>,
     control_snapshot_rx: Receiver<ControlSnapshot>,
-    down_direction: StatsDirection,
     reflectors_lock: ArcRwLock<Vec<IpAddr>>,
     reselect_trigger: Sender<bool>,
     state_dl: State<T::Handle>,
     state_ul: State<T::Handle>,
     stats_provider: S,
     traffic_control: T,
-    up_direction: StatsDirection,
     metrics: MetricsSender,
 }
 
@@ -177,8 +155,6 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         control_snapshot_rx: Receiver<ControlSnapshot>,
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
-        down_direction: StatsDirection,
-        up_direction: StatsDirection,
         metrics: MetricsSender,
         mut stats_provider: S,
         mut traffic_control: T,
@@ -195,26 +171,19 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
             settings.advanced_settings.speed_hist_size,
         );
 
-        let (cur_rx, cur_tx) = get_interface_stats(
-            &mut stats_provider,
-            &settings.network.download_interface,
-            &settings.network.upload_interface,
-            down_direction,
-            up_direction,
-        )?;
+        let (cur_rx, cur_tx) =
+            get_interface_stats(&mut stats_provider, &settings.network.upload_interface)?;
 
         Ok(Self {
             settings,
             control_snapshot: None,
             control_snapshot_rx,
-            down_direction,
             reflectors_lock,
             reselect_trigger,
             state_dl: State::new(dl_shaper, cur_rx, dl_safe_rates),
             state_ul: State::new(ul_shaper, cur_tx, ul_safe_rates),
             stats_provider,
             traffic_control,
-            up_direction,
             metrics,
         })
     }
@@ -350,8 +319,6 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
         control_snapshot_rx: Receiver<ControlSnapshot>,
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
-        down_direction: StatsDirection,
-        up_direction: StatsDirection,
         metrics: MetricsSender,
     ) -> anyhow::Result<Self> {
         Self::new_with_backends(
@@ -359,8 +326,6 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
             control_snapshot_rx,
             reflectors_lock,
             reselect_trigger,
-            down_direction,
-            up_direction,
             metrics,
             interface_stats_provider(),
             traffic_control_backend(),
@@ -425,10 +390,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
                 (self.state_dl.current_bytes, self.state_ul.current_bytes) = get_interface_stats(
                     &mut self.stats_provider,
-                    &self.settings.network.download_interface,
                     &self.settings.network.upload_interface,
-                    self.down_direction,
-                    self.up_direction,
                 )?;
                 self.update_deltas()?;
 

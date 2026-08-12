@@ -26,7 +26,7 @@ use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
 use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
-use crate::ratecontroller::{Ratecontroller, StatsDirection};
+use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
 use crate::settings::MeasurementType;
 use crate::settings::Settings;
@@ -153,10 +153,6 @@ fn install_signal_handlers() {
             signal_handler as *const () as libc::sighandler_t,
         );
     }
-}
-
-fn interface_stats_directions(_: &Settings) -> (StatsDirection, StatsDirection) {
-    (StatsDirection::RX, StatsDirection::TX)
 }
 
 fn probe_identifier() -> u16 {
@@ -415,24 +411,11 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     // Give the baseliner time to collect initial samples before adjusting rates.
     sleep(Duration::from_secs(10));
 
-    let (dl_direction, ul_direction) = interface_stats_directions(settings);
-
-    debug!(
-        "Download direction: {}:{:?}",
-        settings.network.download_interface, dl_direction
-    );
-    debug!(
-        "Upload direction: {}:{:?}",
-        settings.network.upload_interface, ul_direction
-    );
-
     let mut ratecontroller = Ratecontroller::new(
         settings.clone(),
         control_snapshot_rx,
         reflector_peers,
         reselect_tx,
-        dl_direction,
-        ul_direction,
         rate_metrics,
     )?;
 
