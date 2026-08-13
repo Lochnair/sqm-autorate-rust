@@ -44,7 +44,7 @@ netlink-socket2 = { version = "0.3.3" }
 rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "fcfedd204fb76928ef617bf9631b041c816e03d4", optional = true, default-features = false, }
 
 [features]
-default = ["toml", "uci-vendored"]
+default = ["toml", "trace", "uci-vendored"]
 toml = ["config/toml"]
 uci = ["dep:rust-uci"]
 uci-vendored = ["uci", "rust-uci/vendored"]
