@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+use serde::de::{Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::IpAddr;
 
 #[cfg(feature = "trace")]
@@ -51,7 +53,9 @@ pub(crate) enum Event {
         up_time_ms: f64,
     },
     ControllerInitialized {
+        #[serde(deserialize_with = "deserialize_i128")]
         previous_rx_bytes: i128,
+        #[serde(deserialize_with = "deserialize_i128")]
         previous_tx_bytes: i128,
         download_prev_mono_ns: u64,
         upload_prev_mono_ns: u64,
@@ -63,7 +67,9 @@ pub(crate) enum Event {
     ControlEvaluation {
         evaluation_id: u64,
         loop_mono_ns: u64,
+        #[serde(deserialize_with = "deserialize_i128")]
         rx_bytes: i128,
+        #[serde(deserialize_with = "deserialize_i128")]
         tx_bytes: i128,
         active_reflectors: Vec<IpAddr>,
     },
@@ -88,6 +94,31 @@ pub(crate) enum Event {
     End {
         clean: bool,
     },
+}
+
+fn deserialize_i128<'de, D>(deserializer: D) -> Result<i128, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct I128Visitor;
+
+    impl Visitor<'_> for I128Visitor {
+        type Value = i128;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a signed or unsigned integer")
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+            Ok(i128::from(value))
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+            Ok(i128::from(value))
+        }
+    }
+
+    deserializer.deserialize_any(I128Visitor)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -218,7 +249,11 @@ pub(super) mod tests {
         assert_eq!(json["format"], FORMAT_NAME);
         assert_eq!(json["version"], FORMAT_VERSION);
         assert_eq!(json["timestamp"]["mono_ns"], 0);
-        assert_eq!(serde_json::from_value::<Record>(json).unwrap(), record);
+        assert_eq!(
+            crate::trace::reader::parse_record_v1(&serde_json::to_string(&record).unwrap())
+                .unwrap(),
+            record
+        );
     }
 
     #[test]

@@ -4,6 +4,11 @@
 
 pub(crate) mod v1;
 
+#[cfg(all(feature = "trace", test))]
+mod characterization;
+#[cfg(all(feature = "trace", test))]
+mod reader;
+
 #[cfg(feature = "trace")]
 mod writer;
 
@@ -374,7 +379,7 @@ mod tests {
             let contents = std::fs::read_to_string(&path).unwrap();
             let records = contents
                 .lines()
-                .map(|line| serde_json::from_str::<v1::Record>(line).unwrap())
+                .map(|line| super::reader::parse_record_v1(line).unwrap())
                 .collect::<Vec<_>>();
 
             assert_eq!(records.len(), 102);
