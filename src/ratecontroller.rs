@@ -31,11 +31,11 @@ enum Direction {
     Up,
 }
 
-fn generate_initial_speeds(base_speed: f64, size: u32) -> Vec<f64> {
+fn generate_initial_speeds(rng: &mut fastrand::Rng, base_speed: f64, size: u32) -> Vec<f64> {
     let mut rates = Vec::new();
 
     for _ in 0..size {
-        rates.push((fastrand::f64() * 0.2 + 0.75) * base_speed);
+        rates.push((rng.f64() * 0.2 + 0.75) * base_speed);
     }
 
     rates
@@ -144,6 +144,7 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
     reselect_trigger: Sender<bool>,
     state_dl: State<T::Handle>,
     state_ul: State<T::Handle>,
+    rng: fastrand::Rng,
     stats_provider: S,
     traffic_control: T,
     metrics: MetricsSender,
@@ -158,15 +159,18 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         metrics: MetricsSender,
         mut stats_provider: S,
         mut traffic_control: T,
+        mut rng: fastrand::Rng,
     ) -> anyhow::Result<Self> {
         let dl_shaper =
             traffic_control.find_shaper(settings.network.download_interface.as_str())?;
         let dl_safe_rates = generate_initial_speeds(
+            &mut rng,
             settings.network.download_base_kbits,
             settings.advanced_settings.speed_hist_size,
         );
         let ul_shaper = traffic_control.find_shaper(settings.network.upload_interface.as_str())?;
         let ul_safe_rates = generate_initial_speeds(
+            &mut rng,
             settings.network.upload_base_kbits,
             settings.advanced_settings.speed_hist_size,
         );
@@ -182,6 +186,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
             reselect_trigger,
             state_dl: State::new(dl_shaper, cur_rx, dl_safe_rates),
             state_ul: State::new(ul_shaper, cur_tx, ul_safe_rates),
+            rng,
             stats_provider,
             traffic_control,
             metrics,
@@ -266,7 +271,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 if state.delta_stat > delay_ms {
                     match state
                         .safe_rates
-                        .get(fastrand::usize(..state.safe_rates.len()))
+                        .get(self.rng.usize(..state.safe_rates.len()))
                     {
                         Some(rnd_rate) => {
                             state.next_rate = rnd_rate.min(0.9 * state.current_rate * state.load);
@@ -517,6 +522,7 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
             metrics,
             interface_stats_provider(),
             traffic_control_backend(),
+            fastrand::Rng::new(),
         )
     }
 }
@@ -526,6 +532,17 @@ mod tests {
     use super::*;
     use crate::baseliner::{EwmaStats, ReflectorState};
     use std::collections::HashMap;
+
+    #[test]
+    fn fixed_seed_reproduces_initial_safe_rates() {
+        let mut first = fastrand::Rng::with_seed(42);
+        let mut second = fastrand::Rng::with_seed(42);
+
+        let first_rates = generate_initial_speeds(&mut first, 100_000.0, 100);
+        let second_rates = generate_initial_speeds(&mut second, 100_000.0, 100);
+
+        assert_eq!(first_rates, second_rates);
+    }
 
     fn reflector_state(
         baseline_down: f64,
