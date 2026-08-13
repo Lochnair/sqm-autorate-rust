@@ -286,54 +286,6 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         Ok(())
     }
 
-    fn update_deltas(&mut self) -> anyhow::Result<()> {
-        drain_latest_snapshot(&self.control_snapshot_rx, &mut self.control_snapshot);
-        let now_t = Instant::now();
-        let reflectors = self.reflectors_lock.read_anyhow()?;
-        let (down_deltas, up_deltas) = deltas_from_snapshot(
-            self.control_snapshot.as_ref(),
-            &reflectors,
-            now_t,
-            self.settings.advanced_settings.tick_interval,
-        );
-        self.state_dl.deltas = down_deltas;
-        self.state_ul.deltas = up_deltas;
-
-        if self.state_dl.deltas.len() < 5 || self.state_ul.deltas.len() < 5 {
-            // trigger reselection
-            warn!(
-                "Not enough delta values (D: {}, U: {}, need 5), triggering reselection",
-                self.state_dl.deltas.len(),
-                self.state_ul.deltas.len()
-            );
-            let _ = self.reselect_trigger.try_send(true);
-        }
-
-        Ok(())
-    }
-}
-
-impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
-    pub fn new(
-        settings: Settings,
-        control_snapshot_rx: Receiver<ControlSnapshot>,
-        reflectors_lock: ArcRwLock<Vec<IpAddr>>,
-        reselect_trigger: Sender<bool>,
-        metrics: MetricsSender,
-    ) -> anyhow::Result<Self> {
-        Self::new_with_backends(
-            settings,
-            control_snapshot_rx,
-            reflectors_lock,
-            reselect_trigger,
-            metrics,
-            interface_stats_provider(),
-            traffic_control_backend(),
-        )
-    }
-}
-
-impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let sleep_time =
             Duration::from_secs_f64(self.settings.advanced_settings.min_change_interval);
@@ -520,6 +472,52 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 lastdump_t = now_t;
             }
         }
+    }
+
+    fn update_deltas(&mut self) -> anyhow::Result<()> {
+        drain_latest_snapshot(&self.control_snapshot_rx, &mut self.control_snapshot);
+        let now_t = Instant::now();
+        let reflectors = self.reflectors_lock.read_anyhow()?;
+        let (down_deltas, up_deltas) = deltas_from_snapshot(
+            self.control_snapshot.as_ref(),
+            &reflectors,
+            now_t,
+            self.settings.advanced_settings.tick_interval,
+        );
+        self.state_dl.deltas = down_deltas;
+        self.state_ul.deltas = up_deltas;
+
+        if self.state_dl.deltas.len() < 5 || self.state_ul.deltas.len() < 5 {
+            // trigger reselection
+            warn!(
+                "Not enough delta values (D: {}, U: {}, need 5), triggering reselection",
+                self.state_dl.deltas.len(),
+                self.state_ul.deltas.len()
+            );
+            let _ = self.reselect_trigger.try_send(true);
+        }
+
+        Ok(())
+    }
+}
+
+impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
+    pub fn new(
+        settings: Settings,
+        control_snapshot_rx: Receiver<ControlSnapshot>,
+        reflectors_lock: ArcRwLock<Vec<IpAddr>>,
+        reselect_trigger: Sender<bool>,
+        metrics: MetricsSender,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_backends(
+            settings,
+            control_snapshot_rx,
+            reflectors_lock,
+            reselect_trigger,
+            metrics,
+            interface_stats_provider(),
+            traffic_control_backend(),
+        )
     }
 }
 
