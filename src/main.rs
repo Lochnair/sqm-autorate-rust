@@ -18,6 +18,7 @@ mod ratecontroller;
 mod reflector_selector;
 mod settings;
 mod time;
+mod trace;
 mod util;
 
 use crate::baseliner::Baseliner;
@@ -243,6 +244,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     }
 
     let start_time = Instant::now();
+    let trace = trace::Recorder::from_env(start_time, settings);
     let probe_id = probe_identifier();
 
     let ReflectorSetup {
@@ -334,6 +336,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         selection_tx: selection_snapshot_tx,
         baseline_metrics,
         event_metrics: event_metrics.clone(),
+        trace: trace.clone(),
     };
 
     let mut main_traffic_control = traffic_control_backend();
@@ -417,6 +420,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         reflector_peers,
         reselect_tx,
         rate_metrics,
+        trace.clone(),
     )?;
 
     let err_tx = error_tx.clone();
@@ -459,6 +463,8 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         &down_shaper,
         &up_shaper,
     );
+
+    trace.finish();
 
     result
 }

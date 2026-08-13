@@ -9,6 +9,7 @@ use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
 use crate::settings::Settings;
+use crate::trace::{Recorder, v1};
 use flume::{Receiver, Sender};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -78,6 +79,7 @@ pub struct Baseliner {
     pub selection_tx: Option<Sender<ControlSnapshot>>,
     pub baseline_metrics: MetricsSender,
     pub event_metrics: MetricsSender,
+    pub trace: Recorder,
 }
 
 fn ewma_factor(tick: f64, dur: f64) -> f64 {
@@ -207,10 +209,23 @@ impl Baseliner {
             );
 
             let snapshot = control_snapshot(&reflectors, Instant::now());
-            if let Some(selection_tx) = &self.selection_tx {
-                let _ = selection_tx.send(snapshot.clone());
-            }
-            self.control_tx.send(snapshot)?;
+            self.trace.linearize(|trace| {
+                if trace.is_enabled() {
+                    trace.record_at(
+                        reply.last_receive_time_s,
+                        v1::Event::PingReply {
+                            reflector: reply.reflector,
+                            down_time_ms: reply.down_time,
+                            up_time_ms: reply.up_time,
+                        },
+                    );
+                }
+
+                if let Some(selection_tx) = &self.selection_tx {
+                    let _ = selection_tx.send(snapshot.clone());
+                }
+                self.control_tx.send(snapshot)
+            })?;
         }
     }
 }

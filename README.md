@@ -10,6 +10,14 @@
 * **Configurable via environment or UCI**: reads settings from environment variables or OpenWRT UCI, with sensible defaults and type‑safe parsing .
 * **Minimal dependencies**: relies on Rust crates only (anyhow, socket2, neli, rustix), no external scripts .
 
+## Legacy control trace v1
+
+The additive legacy characterization recorder is excluded from default builds. Build with
+`--features trace` and set `SQMA_TRACE_V1_PATH` to a JSON Lines output path to enable it at
+runtime. The format is versioned as trace v1 and is intended only for replaying the current
+baseliner and rate-controller boundary during the `SqmControlLaw` extraction; it is not the
+final runtime event schema. Existing CSV and metrics outputs remain unchanged.
+
 ## Installation
 
 You can install **sqm‑autorate‑rust** in two ways:

@@ -14,6 +14,7 @@ use crate::platform::{
 };
 use crate::settings::Settings;
 use crate::time::Time;
+use crate::trace::{Recorder, v1};
 use crate::util::{ArcRwLock, RwLockExt};
 use flume::{Receiver, Sender};
 use log::{debug, info, warn};
@@ -145,9 +146,11 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
     state_dl: State<T::Handle>,
     state_ul: State<T::Handle>,
     rng: fastrand::Rng,
+    next_evaluation_id: u64,
     stats_provider: S,
     traffic_control: T,
     metrics: MetricsSender,
+    trace: Recorder,
 }
 
 impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
@@ -160,6 +163,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         mut stats_provider: S,
         mut traffic_control: T,
         mut rng: fastrand::Rng,
+        trace: Recorder,
     ) -> anyhow::Result<Self> {
         let dl_shaper =
             traffic_control.find_shaper(settings.network.download_interface.as_str())?;
@@ -178,7 +182,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         let (cur_rx, cur_tx) =
             get_interface_stats(&mut stats_provider, &settings.network.upload_interface)?;
 
-        Ok(Self {
+        let controller = Self {
             settings,
             control_snapshot: None,
             control_snapshot_rx,
@@ -187,16 +191,52 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
             state_dl: State::new(dl_shaper, cur_rx, dl_safe_rates),
             state_ul: State::new(ul_shaper, cur_tx, ul_safe_rates),
             rng,
+            next_evaluation_id: 0,
             stats_provider,
             traffic_control,
             metrics,
-        })
+            trace,
+        };
+
+        if controller.trace.is_enabled() {
+            controller.trace.record_at(
+                Instant::now(),
+                v1::Event::ControllerInitialized {
+                    previous_rx_bytes: controller.state_dl.previous_bytes,
+                    previous_tx_bytes: controller.state_ul.previous_bytes,
+                    download_prev_mono_ns: controller
+                        .trace
+                        .monotonic_ns(controller.state_dl.prev_t),
+                    upload_prev_mono_ns: controller.trace.monotonic_ns(controller.state_ul.prev_t),
+                    download_history_index: controller.state_dl.nrate as u64,
+                    upload_history_index: controller.state_ul.nrate as u64,
+                    download_safe_rates_kbit: controller.state_dl.safe_rates.clone(),
+                    upload_safe_rates_kbit: controller.state_ul.safe_rates.clone(),
+                },
+            );
+        }
+
+        Ok(controller)
     }
 
     fn request_initial_rates(&mut self) -> anyhow::Result<()> {
         // Set rates to 60% of base rate to make sure we start with sane baselines.
         self.state_dl.current_rate = self.settings.network.download_base_kbits * 0.6;
         self.state_ul.current_rate = self.settings.network.upload_base_kbits * 0.6;
+
+        if self.trace.is_enabled() {
+            self.trace.record_at(
+                Instant::now(),
+                v1::Event::RequestedRates {
+                    evaluation_id: None,
+                    reason: v1::RateRequestReason::Startup,
+                    download_kbit: self.state_dl.current_rate.round() as u64,
+                    upload_kbit: self.state_ul.current_rate.round() as u64,
+                    download_requested: true,
+                    upload_requested: true,
+                },
+            );
+        }
 
         self.traffic_control.set_rate(
             &self.state_dl.shaper,
@@ -212,7 +252,8 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         Ok(())
     }
 
-    fn calculate_rate(&mut self, direction: Direction) -> anyhow::Result<()> {
+    fn calculate_rate(&mut self, direction: Direction, evaluation_id: u64) -> anyhow::Result<()> {
+        let trace = self.trace.clone();
         let (base_rate, delay_ms, min_rate, state) = if direction == Direction::Down {
             (
                 self.settings.network.download_base_kbits,
@@ -231,6 +272,20 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
         let now_t = Instant::now();
         let dur = now_t.duration_since(state.prev_t);
+        let trace_enabled = trace.is_enabled();
+        let trace_direction = match direction {
+            Direction::Down => v1::Direction::Download,
+            Direction::Up => v1::Direction::Upload,
+        };
+        if trace_enabled {
+            trace.record_at(
+                now_t,
+                v1::Event::RateCalculation {
+                    evaluation_id,
+                    direction: trace_direction,
+                },
+            );
+        }
 
         if !state.deltas.is_empty() {
             state.next_rate = state.current_rate;
@@ -269,11 +324,20 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 }
 
                 if state.delta_stat > delay_ms {
-                    match state
-                        .safe_rates
-                        .get(self.rng.usize(..state.safe_rates.len()))
-                    {
+                    let selected_index = self.rng.usize(..state.safe_rates.len());
+                    match state.safe_rates.get(selected_index) {
                         Some(rnd_rate) => {
+                            if trace_enabled {
+                                trace.record_at(
+                                    Instant::now(),
+                                    v1::Event::RandomSafeRateChoice {
+                                        evaluation_id,
+                                        direction: trace_direction,
+                                        index: selected_index as u64,
+                                        rate_kbit: *rnd_rate,
+                                    },
+                                );
+                            }
                             state.next_rate = rnd_rate.min(0.9 * state.current_rate * state.load);
                         }
                         None => {
@@ -349,7 +413,9 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     &mut self.stats_provider,
                     &self.settings.network.upload_interface,
                 )?;
-                self.update_deltas()?;
+                let evaluation_id = self.next_evaluation_id;
+                self.next_evaluation_id = self.next_evaluation_id.wrapping_add(1);
+                self.update_deltas(evaluation_id, now_t)?;
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
                     warn!("No reflector data available, dropping to minimum rates");
@@ -361,6 +427,20 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     });
                     self.state_dl.next_rate = self.settings.network.download_min_kbits();
                     self.state_ul.next_rate = self.settings.network.upload_min_kbits();
+
+                    if self.trace.is_enabled() {
+                        self.trace.record_at(
+                            Instant::now(),
+                            v1::Event::RequestedRates {
+                                evaluation_id: Some(evaluation_id),
+                                reason: v1::RateRequestReason::NoReflectorData,
+                                download_kbit: self.state_dl.next_rate as u64,
+                                upload_kbit: self.state_ul.next_rate as u64,
+                                download_requested: true,
+                                upload_requested: true,
+                            },
+                        );
+                    }
 
                     self.traffic_control.set_rate(
                         &self.state_dl.shaper,
@@ -378,8 +458,24 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     continue;
                 }
 
-                self.calculate_rate(Direction::Down)?;
-                self.calculate_rate(Direction::Up)?;
+                self.calculate_rate(Direction::Down, evaluation_id)?;
+                self.calculate_rate(Direction::Up, evaluation_id)?;
+
+                if self.trace.is_enabled() {
+                    let download_requested = self.state_dl.next_rate != self.state_dl.current_rate;
+                    let upload_requested = self.state_ul.next_rate != self.state_ul.current_rate;
+                    self.trace.record_at(
+                        Instant::now(),
+                        v1::Event::RequestedRates {
+                            evaluation_id: Some(evaluation_id),
+                            reason: v1::RateRequestReason::Control,
+                            download_kbit: self.state_dl.next_rate as u64,
+                            upload_kbit: self.state_ul.next_rate as u64,
+                            download_requested,
+                            upload_requested,
+                        },
+                    );
+                }
 
                 if self.state_dl.next_rate != self.state_dl.current_rate
                     || self.state_ul.next_rate != self.state_ul.current_rate
@@ -479,18 +575,36 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         }
     }
 
-    fn update_deltas(&mut self) -> anyhow::Result<()> {
-        drain_latest_snapshot(&self.control_snapshot_rx, &mut self.control_snapshot);
-        let now_t = Instant::now();
-        let reflectors = self.reflectors_lock.read_anyhow()?;
-        let (down_deltas, up_deltas) = deltas_from_snapshot(
-            self.control_snapshot.as_ref(),
-            &reflectors,
-            now_t,
-            self.settings.advanced_settings.tick_interval,
-        );
-        self.state_dl.deltas = down_deltas;
-        self.state_ul.deltas = up_deltas;
+    fn update_deltas(&mut self, evaluation_id: u64, loop_time: Instant) -> anyhow::Result<()> {
+        let recorder = self.trace.clone();
+        recorder.linearize(|trace| -> anyhow::Result<()> {
+            drain_latest_snapshot(&self.control_snapshot_rx, &mut self.control_snapshot);
+            let now_t = Instant::now();
+            let reflectors = self.reflectors_lock.read_anyhow()?;
+            let (down_deltas, up_deltas) = deltas_from_snapshot(
+                self.control_snapshot.as_ref(),
+                &reflectors,
+                now_t,
+                self.settings.advanced_settings.tick_interval,
+            );
+            self.state_dl.deltas = down_deltas;
+            self.state_ul.deltas = up_deltas;
+
+            if trace.is_enabled() {
+                trace.record_at(
+                    now_t,
+                    v1::Event::ControlEvaluation {
+                        evaluation_id,
+                        loop_mono_ns: self.trace.monotonic_ns(loop_time),
+                        rx_bytes: self.state_dl.current_bytes,
+                        tx_bytes: self.state_ul.current_bytes,
+                        active_reflectors: reflectors.clone(),
+                    },
+                );
+            }
+
+            Ok(())
+        })?;
 
         if self.state_dl.deltas.len() < 5 || self.state_ul.deltas.len() < 5 {
             // trigger reselection
@@ -513,6 +627,7 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
         reflectors_lock: ArcRwLock<Vec<IpAddr>>,
         reselect_trigger: Sender<bool>,
         metrics: MetricsSender,
+        trace: Recorder,
     ) -> anyhow::Result<Self> {
         Self::new_with_backends(
             settings,
@@ -523,6 +638,7 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
             interface_stats_provider(),
             traffic_control_backend(),
             fastrand::Rng::new(),
+            trace,
         )
     }
 }

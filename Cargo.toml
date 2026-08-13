@@ -29,6 +29,7 @@ flume = { version = "0.12.0",  default-features = false, features = ["eventual-f
 config = { version = "0.15.25", default-features = false }
 csv = "1.4.0"
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", optional = true }
 uci-derive = { path = "crates/uci-derive" }
 
 [dependencies.log]
@@ -47,6 +48,7 @@ default = ["toml", "uci-vendored"]
 toml = ["config/toml"]
 uci = ["dep:rust-uci"]
 uci-vendored = ["uci", "rust-uci/vendored"]
+trace = ["dep:serde_json"]
 
 [workspace]
 members = ["crates/uci-derive"]

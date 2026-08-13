@@ -563,6 +563,7 @@ dependencies = [
  "rust-uci",
  "rustix",
  "serde",
+ "serde_json",
  "thiserror",
  "uci-derive",
 ]
