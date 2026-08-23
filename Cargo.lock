@@ -321,9 +321,9 @@ checksum = "114816d03a633cef7cfa951721dafbda16bb1ff6af83393ee568ec2d4e4ded2d"
 
 [[package]]
 name = "netlink-socket2"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11193969f046efafdc9d8670d395a6ddcf9b806169f504e520a35dc95cab3241"
+checksum = "5c7ddb0ea7aa692947d5105160acb7c75c17bc5ec6d5a6263440ca7db4be9a34"
 dependencies = [
  "libc",
  "maybe-async",
