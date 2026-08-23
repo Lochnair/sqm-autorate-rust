@@ -30,7 +30,7 @@ use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
 use crate::settings::MeasurementType;
 use crate::settings::Settings;
-use ::log::{debug, info, warn};
+use ::log::{info, warn};
 use flume::RecvTimeoutError;
 use std::collections::HashMap;
 use std::net::IpAddr;
