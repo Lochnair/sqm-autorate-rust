@@ -2,5 +2,18 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Keep netlink-bindings and netlink-socket2 updates together",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "netlink-bindings",
+        "netlink-socket2"
+      ],
+      "groupName": "netlink dependencies"
+    }
   ]
 }
