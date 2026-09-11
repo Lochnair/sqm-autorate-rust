@@ -291,17 +291,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "maybe-async"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "746873a384ad60adc5db74471dfaba74bd278afbdcfd81db93fafcdfc8b5ca0c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -315,19 +304,19 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "netlink-bindings"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a2a0dd8beef757878b977fd3d662c82a93dac4bf7632f42577ca8f8f4d701a0"
+checksum = "15c68f271f059945bc6fb55d210e78c1ceb2d3eac00d18fe9b0806ade81e8a21"
 
 [[package]]
 name = "netlink-socket2"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c7ddb0ea7aa692947d5105160acb7c75c17bc5ec6d5a6263440ca7db4be9a34"
+checksum = "0951d4d6a5131a59af90a26fcecd4e366e8fcee3a38880ba58705e479f5bd8c3"
 dependencies = [
  "libc",
- "maybe-async",
  "netlink-bindings",
+ "strip-async",
 ]
 
 [[package]]
@@ -566,6 +555,12 @@ dependencies = [
  "thiserror",
  "uci-derive",
 ]
+
+[[package]]
+name = "strip-async"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85ec932792e62b2d3936163eacbd2e09984453bcd114f665c1e1694e36ff59c9"
 
 [[package]]
 name = "syn"
