@@ -336,7 +336,22 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 info!("Rate controller shutting down");
                 return Ok(());
             }
-            sleep(sleep_time);
+            let wake_at = Instant::now() + sleep_time;
+            while Instant::now() < wake_at {
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    info!("Rate controller shutting down");
+                    return Ok(());
+                }
+                sleep(
+                    wake_at
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(100)),
+                );
+            }
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Rate controller shutting down");
+                return Ok(());
+            }
             let now_t = Instant::now();
 
             if now_t.duration_since(lastchg_t).as_secs_f64()

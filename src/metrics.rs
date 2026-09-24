@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::SHUTDOWN;
 use crate::settings::Settings;
 use crate::settings::{MeasurementType, ObservabilityProtocol};
 use crate::time::Time;
@@ -12,7 +11,7 @@ use rustix::time::ClockId;
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;
@@ -228,6 +227,7 @@ pub struct Metrics {
     pub settings: Settings,
     pub metrics_dropped: Arc<AtomicU32>,
     pub metrics_rx: Receiver<(Metric, u64)>,
+    pub shutdown_requested: Arc<AtomicBool>,
 }
 
 impl Metrics {
@@ -261,7 +261,7 @@ impl Metrics {
         let mut last_flush = Instant::now();
 
         loop {
-            if SHUTDOWN.load(Ordering::Relaxed) {
+            if self.shutdown_requested.load(Ordering::Relaxed) {
                 let deadline = shutdown_deadline
                     .get_or_insert_with(|| Instant::now() + Duration::from_millis(400));
                 if Instant::now() >= *deadline {

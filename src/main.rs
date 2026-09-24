@@ -264,6 +264,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let (reselect_tx, reselect_rx) = flume::bounded(1);
 
     let dropped = Arc::new(AtomicU32::new(0));
+    let metrics_shutdown = Arc::new(AtomicBool::new(false));
 
     let (metrics_tx, metrics_thread_handle) = if settings.observability.enabled {
         let (tx, rx) = flume::bounded(1000);
@@ -271,6 +272,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             settings: settings.clone(),
             metrics_rx: rx,
             metrics_dropped: Arc::clone(&dropped),
+            shutdown_requested: Arc::clone(&metrics_shutdown),
         };
         let err_tx = error_tx.clone();
         let handle = thread::Builder::new()
@@ -420,7 +422,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     )?;
 
     let err_tx = error_tx.clone();
-    thread::Builder::new()
+    let ratecontroller_thread_handle = thread::Builder::new()
         .name("ratecontroller".to_string())
         .spawn(move || {
             if let Err(error) = ratecontroller.run() {
@@ -444,10 +446,17 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         tags: &[],
     });
 
-    // Drop all MetricsSender instances and the raw tx so the metrics channel
-    // disconnects once all worker threads also drop their copies.
+    let _ = ratecontroller_thread_handle.join();
+    restore_shaper(
+        settings,
+        &mut main_traffic_control,
+        &down_shaper,
+        &up_shaper,
+    );
+
     drop(main_event_metrics);
     drop(metrics_tx);
+    metrics_shutdown.store(true, Ordering::Relaxed);
 
     if let Some(handle) = metrics_thread_handle {
         let deadline = Instant::now() + Duration::from_secs(1);
@@ -460,13 +469,6 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             warn!("Metrics exporter did not stop within one second");
         }
     }
-
-    restore_shaper(
-        settings,
-        &mut main_traffic_control,
-        &down_shaper,
-        &up_shaper,
-    );
 
     result
 }
