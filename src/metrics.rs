@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::SHUTDOWN;
 use crate::settings::Settings;
 use crate::settings::{MeasurementType, ObservabilityProtocol};
 use crate::time::Time;
@@ -12,83 +13,150 @@ use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;
 
+struct Endpoint {
+    host: String,
+    port: u16,
+    backoff: u64,
+    next_attempt: Option<Instant>,
+}
+
+impl Endpoint {
+    fn new(host: &str, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            backoff: 1,
+            next_attempt: None,
+        }
+    }
+
+    fn failed(&mut self) -> u64 {
+        let delay = self.backoff;
+        self.next_attempt = Some(Instant::now() + Duration::from_secs(delay));
+        self.backoff = (self.backoff * 2).min(MAX_RECONNECT_BACKOFF);
+        delay
+    }
+
+    fn connected(&mut self) {
+        self.backoff = 1;
+        self.next_attempt = None;
+    }
+}
+
 enum Transport {
-    Udp(UdpSocket),
+    Udp {
+        socket: Option<UdpSocket>,
+        endpoint: Endpoint,
+    },
     Tcp {
         stream: Option<TcpStream>,
-        host: String,
-        port: u16,
-        reconnect_backoff: u64,
+        endpoint: Endpoint,
     },
 }
 
 impl Transport {
-    fn new_udp(host: &str, port: u16) -> anyhow::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.set_write_timeout(Some(Duration::from_millis(100)))?;
-        socket.connect((host, port))?;
-        Ok(Transport::Udp(socket))
+    fn new_udp(host: &str, port: u16) -> Self {
+        Transport::Udp {
+            socket: None,
+            endpoint: Endpoint::new(host, port),
+        }
     }
 
     fn new_tcp(host: &str, port: u16) -> Self {
         Transport::Tcp {
             stream: None,
-            host: host.to_string(),
-            port,
-            reconnect_backoff: 1,
+            endpoint: Endpoint::new(host, port),
         }
     }
 
     fn send(&mut self, data: &str) {
         match self {
-            Transport::Udp(socket) => {
-                if let Err(e) = socket.send(data.as_bytes()) {
-                    warn!("UDP send failed: {}", e);
+            Transport::Udp { socket, endpoint } => {
+                if socket.is_none() {
+                    if endpoint.next_attempt.is_some_and(|at| Instant::now() < at) {
+                        return;
+                    }
+                    let opened = UdpSocket::bind("0.0.0.0:0").and_then(|socket| {
+                        socket.set_write_timeout(Some(Duration::from_millis(100)))?;
+                        socket.connect((endpoint.host.as_str(), endpoint.port))?;
+                        Ok(socket)
+                    });
+                    match opened {
+                        Ok(opened) => {
+                            *socket = Some(opened);
+                            endpoint.connected();
+                        }
+                        Err(error) => {
+                            let delay = endpoint.failed();
+                            warn!(
+                                "Metrics UDP connect to {}:{} failed: {error}; retrying in {delay}s",
+                                endpoint.host, endpoint.port
+                            );
+                            return;
+                        }
+                    }
+                }
+                if let Some(error) = socket
+                    .as_ref()
+                    .and_then(|socket| socket.send(data.as_bytes()).err())
+                {
+                    *socket = None;
+                    let delay = endpoint.failed();
+                    warn!("Metrics UDP send failed: {error}; retrying in {delay}s");
                 }
             }
-            Transport::Tcp {
-                stream,
-                host,
-                port,
-                reconnect_backoff,
-            } => {
+            Transport::Tcp { stream, endpoint } => {
                 if stream.is_none() {
-                    match TcpStream::connect((host.as_str(), *port)) {
+                    if endpoint.next_attempt.is_some_and(|at| Instant::now() < at) {
+                        return;
+                    }
+                    match TcpStream::connect((endpoint.host.as_str(), endpoint.port)) {
                         Ok(s) => {
                             s.set_write_timeout(Some(Duration::from_millis(500))).ok();
-                            info!("Connected to metrics collector at {}:{}", host, port);
+                            info!(
+                                "Connected to metrics collector at {}:{}",
+                                endpoint.host, endpoint.port
+                            );
                             *stream = Some(s);
-                            *reconnect_backoff = 1;
+                            endpoint.connected();
                         }
                         Err(e) => {
+                            let delay = endpoint.failed();
                             warn!(
-                                "Failed to connect to {}:{} - {}, backoff {}s",
-                                host, port, e, reconnect_backoff
+                                "Metrics TCP connect to {}:{} failed: {e}; retrying in {delay}s",
+                                endpoint.host, endpoint.port
                             );
-                            *reconnect_backoff =
-                                (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
                             return;
                         }
                     }
                 }
 
-                let full_data = format!("{}\n", data);
-                // take the stream out, write, put it back or set None on failure
                 let write_error = stream
                     .as_mut()
-                    .and_then(|s| std::io::Write::write_all(s, full_data.as_bytes()).err());
+                    .and_then(|s| std::io::Write::write_all(s, data.as_bytes()).err());
                 if let Some(e) = write_error {
                     warn!("TCP send failed: {}", e);
                     *stream = None;
-                    *reconnect_backoff = (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
+                    endpoint.failed();
                 }
             }
         }
     }
+}
+
+fn escape_tag_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, ',' | '=' | ' ') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 pub enum Metric {
@@ -180,7 +248,7 @@ impl Metrics {
         let mut transport = match self.settings.observability.protocol {
             ObservabilityProtocol::Udp => {
                 info!("Metrics exporter configured for UDP to {}:{}", host, port);
-                Transport::new_udp(&host, port)?
+                Transport::new_udp(&host, port)
             }
             ObservabilityProtocol::Tcp => {
                 info!("Metrics exporter configured for TCP to {}:{}", host, port);
@@ -189,12 +257,30 @@ impl Metrics {
         };
 
         let mut batch = Vec::with_capacity(batch_size);
+        let mut shutdown_deadline = None;
+        let mut last_flush = Instant::now();
 
         loop {
-            // block until first metric or timeout
-            match self.metrics_rx.recv_timeout(timeout) {
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                let deadline = shutdown_deadline
+                    .get_or_insert_with(|| Instant::now() + Duration::from_millis(400));
+                if Instant::now() >= *deadline {
+                    if !batch.is_empty() {
+                        self.flush(&mut transport, &batch, host_tag);
+                    }
+                    break;
+                }
+            }
+
+            match self
+                .metrics_rx
+                .recv_timeout(timeout.min(Duration::from_millis(100)))
+            {
                 Ok(metric) => batch.push(metric),
                 Err(RecvTimeoutError::Timeout) => {
+                    if last_flush.elapsed() < timeout && shutdown_deadline.is_none() {
+                        continue;
+                    }
                     let dropped = self.metrics_dropped.swap(0, Ordering::Relaxed);
                     if dropped > 0 {
                         let ts = Time::new(ClockId::Realtime).as_nanos();
@@ -204,9 +290,15 @@ impl Metrics {
                         self.flush(&mut transport, &batch, host_tag);
                         batch.clear();
                     }
+                    last_flush = Instant::now();
                     continue;
                 }
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Disconnected) => {
+                    if !batch.is_empty() {
+                        self.flush(&mut transport, &batch, host_tag);
+                    }
+                    break;
+                }
             }
 
             // greedily drain without blocking
@@ -220,6 +312,7 @@ impl Metrics {
             if batch.len() >= batch_size {
                 self.flush(&mut transport, &batch, host_tag);
                 batch.clear();
+                last_flush = Instant::now();
             }
         }
 
@@ -227,30 +320,31 @@ impl Metrics {
     }
 
     fn flush(&self, transport: &mut Transport, batch: &[(Metric, u64)], host_tag: &str) {
+        let host_tag = escape_tag_value(host_tag);
         match transport {
             /*
              * the UDP receive buffer might be too small on the receiver to accept batched data,
              * and it'll get cutoff in the middle of a record. so send metrics directly on UDP
              */
-            Transport::Udp(_) => {
+            Transport::Udp { .. } => {
                 let mut data = String::with_capacity(300);
                 for (metric, timestamp_ns) in batch {
                     data.clear();
-                    self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
+                    Self::write_lines(metric, *timestamp_ns, &host_tag, &mut data);
                     transport.send(&data);
                 }
             }
             Transport::Tcp { .. } => {
                 let mut data = String::with_capacity(batch.len() * 300);
                 for (metric, timestamp_ns) in batch {
-                    self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
+                    Self::write_lines(metric, *timestamp_ns, &host_tag, &mut data);
                 }
                 transport.send(&data);
             }
         }
     }
 
-    fn write_lines(&self, metric: &Metric, timestamp_ns: u64, host_tag: &str, out: &mut String) {
+    fn write_lines(metric: &Metric, timestamp_ns: u64, host_tag: &str, out: &mut String) {
         match metric {
             Metric::Ping {
                 reflector,
@@ -262,7 +356,7 @@ impl Metrics {
                 writeln!(
                     out,
                     "sqm_ping,host={host_tag},reflector={reflector},type={measurement_type} \
-                    rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}i"
+                    rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}"
                 )
                 .unwrap_or(());
             }
@@ -276,11 +370,11 @@ impl Metrics {
             } => {
                 writeln!(out,
                     "sqm_rate,host={host_tag},direction=download \
-                    rate_kbps={dl_rate:.0},load={rx_load:.4},delta_delay={delta_delay_down:.3} {timestamp_ns}i"
+                    rate_kbps={dl_rate:.0},load={rx_load:.4},delta_delay={delta_delay_down:.3} {timestamp_ns}"
                 ).unwrap_or(());
                 writeln!(out,
                     "sqm_rate,host={host_tag},direction=upload \
-                    rate_kbps={ul_rate:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}i"
+                    rate_kbps={ul_rate:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}"
                 ).unwrap_or(());
             }
             Metric::Baseline {
@@ -292,11 +386,11 @@ impl Metrics {
             } => {
                 writeln!(out,
                     "sqm_baseline,host={host_tag},reflector={reflector},direction=up \
-                    baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}i"
+                    baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}"
                 ).unwrap_or(());
                 writeln!(out,
                     "sqm_baseline,host={host_tag},reflector={reflector},direction=down \
-                    baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}i"
+                    baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}"
                 ).unwrap_or(());
             }
             Metric::Event {
@@ -327,6 +421,56 @@ impl Metrics {
                     "sqm_metrics_dropped,host={host_tag} count={count}i {timestamp_ns}"
                 )
                 .unwrap_or(());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_protocol_uses_bare_timestamps_and_escaped_tags() {
+        let reflector = "192.0.2.1".parse().unwrap();
+        let metrics = [
+            Metric::Ping {
+                reflector,
+                measurement_type: MeasurementType::Icmp,
+                rtt: 2.0,
+                up_time: 1.0,
+                down_time: 1.0,
+            },
+            Metric::Rate {
+                dl_rate: 100.0,
+                ul_rate: 50.0,
+                rx_load: 0.2,
+                tx_load: 0.3,
+                delta_delay_down: 1.0,
+                delta_delay_up: 2.0,
+            },
+            Metric::Baseline {
+                reflector,
+                baseline_up_ewma: 1.0,
+                baseline_down_ewma: 2.0,
+                recent_up_ewma: 1.0,
+                recent_down_ewma: 2.0,
+            },
+            Metric::Event {
+                name: "started",
+                reason: "",
+                reflector: None,
+                tags: &[],
+            },
+            Metric::Dropped { count: 1 },
+        ];
+        let host = escape_tag_value("a b,c=d");
+        for metric in metrics {
+            let mut output = String::new();
+            Metrics::write_lines(&metric, 123, &host, &mut output);
+            for line in output.lines() {
+                assert!(line.contains("host=a\\ b\\,c\\=d"), "{line}");
+                assert!(line.ends_with(" 123"), "{line}");
             }
         }
     }

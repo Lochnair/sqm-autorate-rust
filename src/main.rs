@@ -450,7 +450,15 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     drop(metrics_tx);
 
     if let Some(handle) = metrics_thread_handle {
-        let _ = handle.join();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !handle.is_finished() && Instant::now() < deadline {
+            sleep(Duration::from_millis(20));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        } else {
+            warn!("Metrics exporter did not stop within one second");
+        }
     }
 
     restore_shaper(
