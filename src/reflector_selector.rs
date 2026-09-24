@@ -98,9 +98,14 @@ fn receive_snapshots_until(
     }
 }
 
-fn recent_rtt_for_peer(snapshot: Option<&ControlSnapshot>, peer: &IpAddr) -> Option<u64> {
+fn recent_rtt_for_peer(
+    snapshot: Option<&ControlSnapshot>,
+    peer: &IpAddr,
+    baseline_started_at: Instant,
+) -> Option<u64> {
     snapshot
         .and_then(|snapshot| snapshot.reflectors.get(peer))
+        .filter(|state| state.last_receive_at >= baseline_started_at)
         .map(|state| (state.recent.down + state.recent.up) as u64)
 }
 
@@ -186,6 +191,7 @@ impl ReflectorSelector {
 
             // Clone next_peers because we need it again after the baseline sleep
             // to iterate over candidates for RTT measurement.
+            let baseline_started_at = Instant::now();
             *reflectors_peers = next_peers.clone();
 
             // Drop the MutexGuard explicitly, as Rust won't unlock the mutex by default
@@ -206,7 +212,9 @@ impl ReflectorSelector {
             let mut candidates = Vec::new();
 
             for peer in next_peers {
-                if let Some(rtt) = recent_rtt_for_peer(latest_snapshot.as_ref(), &peer) {
+                if let Some(rtt) =
+                    recent_rtt_for_peer(latest_snapshot.as_ref(), &peer, baseline_started_at)
+                {
                     candidates.push((peer, rtt));
                     info!("Candidate reflector: {} RTT: {}", peer, rtt);
                 } else {
@@ -400,8 +408,20 @@ mod tests {
         );
 
         assert_eq!(
-            recent_rtt_for_peer(latest_snapshot.as_ref(), &peer),
+            recent_rtt_for_peer(
+                latest_snapshot.as_ref(),
+                &peer,
+                generated_at - Duration::from_millis(1),
+            ),
             Some(42)
+        );
+        assert_eq!(
+            recent_rtt_for_peer(
+                latest_snapshot.as_ref(),
+                &peer,
+                generated_at + Duration::from_secs(1),
+            ),
+            None
         );
     }
 }
