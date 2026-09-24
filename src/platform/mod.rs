@@ -14,6 +14,10 @@ pub(crate) trait InterfaceStatsProvider: Send {
     type Error: Error + Send + Sync + 'static;
 
     fn read_stats(&mut self, interface: &str) -> Result<InterfaceStats, Self::Error>;
+
+    fn is_interface_missing(_error: &Self::Error) -> bool {
+        false
+    }
 }
 
 pub(crate) trait TrafficControlBackend: Send {

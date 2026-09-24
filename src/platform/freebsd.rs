@@ -105,6 +105,10 @@ impl InterfaceStatsProvider for FreeBsdInterfaceStats {
             tx_bytes: ifmd.ifmd_data.ifi_obytes,
         })
     }
+
+    fn is_interface_missing(error: &Self::Error) -> bool {
+        matches!(error, FreeBsdInterfaceStatsError::InterfaceNotFound { .. })
+    }
 }
 
 pub(crate) type PlatformInterfaceStats = FreeBsdInterfaceStats;

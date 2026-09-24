@@ -63,6 +63,10 @@ impl InterfaceStatsProvider for MacOsInterfaceStats {
         let response = route_interface_list(interface_index)?;
         parse_route_messages(&response, interface_index)
     }
+
+    fn is_interface_missing(error: &Self::Error) -> bool {
+        matches!(error, MacOsInterfaceStatsError::InterfaceNotFound { .. })
+    }
 }
 
 fn route_interface_list(

@@ -18,9 +18,6 @@ use std::sync::atomic::Ordering;
 
 #[derive(Debug, Error)]
 pub(crate) enum NetlinkError {
-    #[error("Couldn't find interface `{0}`")]
-    InterfaceNotFound(String),
-
     #[error("Netlink error: {0}")]
     Netlink(#[from] io::Error),
 
@@ -48,9 +45,8 @@ pub(crate) struct Qdisc {
 }
 
 impl NetlinkError {
-    fn is_qdisc_loss(&self) -> bool {
+    fn is_interface_missing(&self) -> bool {
         match self {
-            Self::InterfaceNotFound(_) | Self::NoQdiscFound(_) => true,
             Self::Netlink(error) => {
                 matches!(error.raw_os_error(), Some(libc::ENODEV | libc::ENOENT))
             }
@@ -60,6 +56,10 @@ impl NetlinkError {
             ),
             _ => false,
         }
+    }
+
+    fn is_qdisc_loss(&self) -> bool {
+        self.is_interface_missing() || matches!(self, Self::NoQdiscFound(_))
     }
 }
 
@@ -74,9 +74,7 @@ impl Netlink {
         request.encode().push_ifname_bytes(ifname.as_bytes());
 
         let mut iter = socket.request(&request)?;
-        let (header, _) = iter
-            .recv_one()
-            .map_err(|_| NetlinkError::InterfaceNotFound(ifname.to_string()))?;
+        let (header, _) = iter.recv_one()?;
         Ok(header.ifi_index)
     }
 
@@ -172,6 +170,10 @@ impl InterfaceStatsProvider for Netlink {
     fn read_stats(&mut self, interface: &str) -> Result<InterfaceStats, Self::Error> {
         let (rx_bytes, tx_bytes) = Self::get_interface_stats(interface)?;
         Ok(InterfaceStats { rx_bytes, tx_bytes })
+    }
+
+    fn is_interface_missing(error: &Self::Error) -> bool {
+        error.is_interface_missing()
     }
 }
 

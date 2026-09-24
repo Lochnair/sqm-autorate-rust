@@ -367,14 +367,8 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                         &mut self.stats_provider,
                         &self.settings.network.upload_interface,
                     ) {
-                        Ok(stats) => {
-                            if stats_missing {
-                                info!("Interface statistics available again");
-                                stats_missing = false;
-                            }
-                            stats
-                        }
-                        Err(error) => {
+                        Ok(stats) => stats,
+                        Err(error) if S::is_interface_missing(&error) => {
                             if !stats_missing {
                                 warn!(
                                     "Interface statistics unavailable: {error}; waiting for interface recovery"
@@ -383,6 +377,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                             }
                             continue;
                         }
+                        Err(error) => return Err(error.into()),
                     };
                 if SHUTDOWN.load(Ordering::Relaxed) {
                     return Ok(());
@@ -403,6 +398,23 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                         false,
                     )?;
                     last_reassert_t = now_t;
+                }
+                if stats_missing
+                    || self.state_dl.current_bytes < self.state_dl.previous_bytes
+                    || self.state_ul.current_bytes < self.state_ul.previous_bytes
+                {
+                    if stats_missing {
+                        info!("Interface statistics available again");
+                        stats_missing = false;
+                    } else {
+                        warn!("Interface byte counters reset");
+                    }
+                    self.state_dl.previous_bytes = self.state_dl.current_bytes;
+                    self.state_ul.previous_bytes = self.state_ul.current_bytes;
+                    self.state_dl.prev_t = now_t;
+                    self.state_ul.prev_t = now_t;
+                    lastchg_t = now_t;
+                    continue;
                 }
                 self.update_deltas()?;
 
