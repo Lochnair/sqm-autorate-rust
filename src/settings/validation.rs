@@ -282,11 +282,17 @@ impl AdvancedSettings {
             self.min_change_interval,
         );
 
-        validate_greater_than_zero_f64(
+        let tick_valid = validate_greater_than_zero_f64(
             report,
             "advanced_settings.tick_interval",
             self.tick_interval,
         );
+        if tick_valid && self.tick_interval < 0.01 {
+            report.error(
+                "advanced_settings.tick_interval",
+                "must be at least 0.01 seconds",
+            );
+        }
 
         if self.num_reflectors < 5 {
             report.error(

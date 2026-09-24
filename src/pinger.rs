@@ -74,6 +74,8 @@ pub trait PingListener {
         ping_metrics: MetricsSender,
     ) -> anyhow::Result<()> {
         let socket = &mut open_socket(type_)?;
+        socket.set_timeout(Some(Duration::from_millis(500)));
+        let mut last_receive_warning = None;
 
         loop {
             if SHUTDOWN.load(Ordering::Relaxed) {
@@ -82,7 +84,24 @@ pub trait PingListener {
             }
             let (pkt, sender) = match socket.rcv_from() {
                 Ok(val) => val,
-                Err(_) => continue,
+                Err(error) => {
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) {
+                        continue;
+                    }
+                    if error.raw_os_error().is_some() {
+                        if last_receive_warning
+                            .is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(30))
+                        {
+                            warn!("ICMP receive failed: {error}");
+                            last_receive_warning = Some(Instant::now());
+                        }
+                        thread::sleep(Duration::from_millis(200));
+                    }
+                    continue;
+                }
             };
 
             let addr: IpAddr = sender.as_socket().unwrap().ip();
@@ -158,7 +177,8 @@ pub trait PingSender {
         let mut socket = open_socket(type_)?;
 
         let mut seq: u16 = 0;
-        let tick_duration_ms: u16 = (tick_interval * 1000.0) as u16;
+        let tick_duration = Duration::from_secs_f64(tick_interval);
+        let mut last_send_warning = None;
 
         loop {
             if SHUTDOWN.load(Ordering::Relaxed) {
@@ -172,7 +192,7 @@ pub trait PingSender {
             drop(reflectors_unlocked);
 
             if reflectors.is_empty() {
-                thread::sleep(Duration::from_millis(tick_duration_ms as u64));
+                thread::sleep(tick_duration);
                 continue;
             }
 
@@ -180,13 +200,12 @@ pub trait PingSender {
                 .lock_anyhow()?
                 .retain(|_, probe| probe.sent_at.elapsed() < INFLIGHT_PROBE_TTL);
 
-            let sleep_duration =
-                Duration::from_millis((tick_duration_ms / reflectors.len() as u16) as u64);
+            let sleep_duration = Duration::from_secs_f64(tick_interval / reflectors.len() as f64);
 
             for reflector in reflectors.iter() {
                 let addr: Ipv4Addr = match reflector {
                     IpAddr::V4(ipv4) => *ipv4,
-                    IpAddr::V6(_) => unimplemented!(),
+                    IpAddr::V6(_) => continue,
                 };
 
                 let (packet, originate_timestamp) = self.craft_packet(id, seq);
@@ -201,7 +220,25 @@ pub trait PingSender {
                 );
                 if let Err(e) = socket.send_to(addr, packet) {
                     inflight.lock_anyhow()?.remove(&key);
-                    return Err(e.into());
+                    if matches!(
+                        e.raw_os_error(),
+                        Some(
+                            libc::ENETUNREACH
+                                | libc::EHOSTUNREACH
+                                | libc::ENETDOWN
+                                | libc::ENOBUFS
+                                | libc::EADDRNOTAVAIL
+                        )
+                    ) {
+                        if last_send_warning
+                            .is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(30))
+                        {
+                            warn!("ICMP send failed during network outage: {e}");
+                            last_send_warning = Some(Instant::now());
+                        }
+                    } else {
+                        return Err(e.into());
+                    }
                 }
                 thread::sleep(sleep_duration);
             }

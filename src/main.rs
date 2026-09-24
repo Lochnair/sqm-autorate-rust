@@ -202,19 +202,22 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
     ];
 
     let reselection_enabled = configured_count > settings.advanced_settings.num_reflectors as usize;
-    let pool = if reselection_enabled {
-        configured
+    let (peers, pool) = if reselection_enabled {
+        (default_reflectors.to_vec(), configured)
+    } else if configured.is_empty() {
+        (default_reflectors.to_vec(), Vec::new())
     } else {
-        Vec::new()
+        (configured, Vec::new())
     };
+    let active_count = peers
+        .len()
+        .max(settings.advanced_settings.num_reflectors as usize);
 
     Ok(ReflectorSetup {
-        peers: Arc::new(RwLock::new(default_reflectors.to_vec())),
+        peers: Arc::new(RwLock::new(peers)),
         pool,
         reselection_enabled,
-        active_count: default_reflectors
-            .len()
-            .max(settings.advanced_settings.num_reflectors as usize),
+        active_count,
     })
 }
 
@@ -475,4 +478,42 @@ fn main() -> anyhow::Result<()> {
     warn_platform_limitations();
 
     run(&settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{
+        AdvancedSettings, NetworkSettings, ObservabilitySettings, OutputSettings,
+    };
+
+    #[test]
+    fn small_configured_reflector_list_is_used() {
+        let path = std::env::temp_dir().join(format!("sqma-reflectors-{}.csv", process::id()));
+        std::fs::write(
+            &path,
+            "reflector_ip,ip_version,description\n192.0.2.1,4,test\n192.0.2.2,4,test\n192.0.2.3,4,test\n192.0.2.4,4,test\n192.0.2.5,4,test\n",
+        ).unwrap();
+        let settings = Settings {
+            network: NetworkSettings {
+                download_interface: "ifb0".into(),
+                upload_interface: "eth0".into(),
+                download_base_kbits: 10_000.0,
+                download_min_percent: 20.0,
+                upload_base_kbits: 5_000.0,
+                upload_min_percent: 20.0,
+            },
+            output: OutputSettings::default(),
+            observability: ObservabilitySettings::default(),
+            advanced_settings: AdvancedSettings {
+                reflector_list_file: path.to_string_lossy().into_owned(),
+                ..AdvancedSettings::default()
+            },
+        };
+        let setup = setup_reflectors(&settings).unwrap();
+        let configured = settings.load_reflectors().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(!setup.reselection_enabled);
+        assert_eq!(*setup.peers.read().unwrap(), configured);
+    }
 }
