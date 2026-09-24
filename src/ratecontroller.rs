@@ -297,6 +297,8 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
         let mut lastchg_t = Instant::now();
         let mut lastdump_t = Instant::now();
+        let mut last_reassert_t = Instant::now();
+        let mut stats_missing = false;
 
         self.request_initial_rates()?;
 
@@ -336,7 +338,22 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 info!("Rate controller shutting down");
                 return Ok(());
             }
-            sleep(sleep_time);
+            let wake_at = Instant::now() + sleep_time;
+            while Instant::now() < wake_at {
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    info!("Rate controller shutting down");
+                    return Ok(());
+                }
+                sleep(
+                    wake_at
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(100)),
+                );
+            }
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Rate controller shutting down");
+                return Ok(());
+            }
             let now_t = Instant::now();
 
             if now_t.duration_since(lastchg_t).as_secs_f64()
@@ -345,10 +362,48 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 // if it's been long enough, and the stats indicate needing to change speeds
                 // change speeds here
 
-                (self.state_dl.current_bytes, self.state_ul.current_bytes) = get_interface_stats(
-                    &mut self.stats_provider,
-                    &self.settings.network.upload_interface,
-                )?;
+                (self.state_dl.current_bytes, self.state_ul.current_bytes) =
+                    match get_interface_stats(
+                        &mut self.stats_provider,
+                        &self.settings.network.upload_interface,
+                    ) {
+                        Ok(stats) => {
+                            if stats_missing {
+                                info!("Interface statistics available again");
+                                stats_missing = false;
+                            }
+                            stats
+                        }
+                        Err(error) => {
+                            if !stats_missing {
+                                warn!(
+                                    "Interface statistics unavailable: {error}; waiting for interface recovery"
+                                );
+                                stats_missing = true;
+                            }
+                            continue;
+                        }
+                    };
+                if SHUTDOWN.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+
+                // SQM may replace CAKE while the desired rate remains unchanged.
+                if !self.settings.advanced_settings.dry_run
+                    && now_t.duration_since(last_reassert_t) >= Duration::from_secs(5)
+                {
+                    self.traffic_control.set_rate(
+                        &self.state_dl.shaper,
+                        self.state_dl.current_rate.round() as u64,
+                        false,
+                    )?;
+                    self.traffic_control.set_rate(
+                        &self.state_ul.shaper,
+                        self.state_ul.current_rate.round() as u64,
+                        false,
+                    )?;
+                    last_reassert_t = now_t;
+                }
                 self.update_deltas()?;
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {

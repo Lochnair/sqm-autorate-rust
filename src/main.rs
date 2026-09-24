@@ -121,16 +121,24 @@ fn initialize_shaper_with_settle_time<T: TrafficControlBackend>(
         settings.network.upload_min_kbits(),
     );
 
-    traffic_control.set_rate(
+    if let Err(error) = traffic_control.set_rate(
         &down,
         settings.network.download_min_kbits() as u64,
         settings.advanced_settings.dry_run,
-    )?;
-    traffic_control.set_rate(
+    ) {
+        SHUTDOWN.store(true, Ordering::Relaxed);
+        restore_shaper(settings, traffic_control, &down, &up);
+        return Err(error.into());
+    }
+    if let Err(error) = traffic_control.set_rate(
         &up,
         settings.network.upload_min_kbits() as u64,
         settings.advanced_settings.dry_run,
-    )?;
+    ) {
+        SHUTDOWN.store(true, Ordering::Relaxed);
+        restore_shaper(settings, traffic_control, &down, &up);
+        return Err(error.into());
+    }
 
     info!(
         "Sleeping for {} seconds to give the shaper a chance to control existing bloat",
@@ -185,6 +193,20 @@ fn restore_shaper<T: TrafficControlBackend>(
         settings.advanced_settings.dry_run,
     ) {
         warn!("Failed to restore upload shaper rate: {error}");
+    }
+}
+
+struct ShaperGuard<'a, T: TrafficControlBackend> {
+    settings: &'a Settings,
+    traffic_control: &'a mut T,
+    down: T::Handle,
+    up: T::Handle,
+}
+
+impl<T: TrafficControlBackend> Drop for ShaperGuard<'_, T> {
+    fn drop(&mut self) {
+        SHUTDOWN.store(true, Ordering::Relaxed);
+        restore_shaper(self.settings, self.traffic_control, &self.down, &self.up);
     }
 }
 
@@ -338,6 +360,12 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
 
     let mut main_traffic_control = traffic_control_backend();
     let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
+    let shaper_guard = ShaperGuard {
+        settings,
+        traffic_control: &mut main_traffic_control,
+        down: down_shaper,
+        up: up_shaper,
+    };
 
     let err_tx = error_tx.clone();
     let listener_peers = Arc::clone(&reflector_peers);
@@ -409,7 +437,13 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     }
 
     // Give the baseliner time to collect initial samples before adjusting rates.
-    sleep(Duration::from_secs(10));
+    let baseline_start = Instant::now();
+    while baseline_start.elapsed() < Duration::from_secs(10) {
+        if SHUTDOWN.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100));
+    }
 
     let mut ratecontroller = Ratecontroller::new(
         settings.clone(),
@@ -420,7 +454,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     )?;
 
     let err_tx = error_tx.clone();
-    thread::Builder::new()
+    let ratecontroller_thread_handle = thread::Builder::new()
         .name("ratecontroller".to_string())
         .spawn(move || {
             if let Err(error) = ratecontroller.run() {
@@ -449,16 +483,12 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     drop(main_event_metrics);
     drop(metrics_tx);
 
+    let _ = ratecontroller_thread_handle.join();
+    drop(shaper_guard);
+
     if let Some(handle) = metrics_thread_handle {
         let _ = handle.join();
     }
-
-    restore_shaper(
-        settings,
-        &mut main_traffic_control,
-        &down_shaper,
-        &up_shaper,
-    );
 
     result
 }
@@ -475,4 +505,86 @@ fn main() -> anyhow::Result<()> {
     warn_platform_limitations();
 
     run(&settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{
+        AdvancedSettings, NetworkSettings, ObservabilitySettings, OutputSettings,
+    };
+
+    #[derive(Default)]
+    struct FakeControl {
+        calls: Vec<(String, u64)>,
+        fail_upload_min: bool,
+    }
+
+    impl TrafficControlBackend for FakeControl {
+        type Error = std::io::Error;
+        type Handle = String;
+
+        fn find_shaper(&mut self, interface: &str) -> Result<Self::Handle, Self::Error> {
+            Ok(interface.into())
+        }
+
+        fn set_rate(
+            &mut self,
+            shaper: &Self::Handle,
+            rate: u64,
+            _: bool,
+        ) -> Result<(), Self::Error> {
+            self.calls.push((shaper.clone(), rate));
+            if self.fail_upload_min && shaper == "eth0" && rate == 1_000 {
+                return Err(std::io::Error::other("simulated startup failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn startup_failures_restore_both_base_rates() {
+        let settings = Settings {
+            network: NetworkSettings {
+                download_interface: "ifb0".into(),
+                upload_interface: "eth0".into(),
+                download_base_kbits: 10_000.0,
+                download_min_percent: 20.0,
+                upload_base_kbits: 5_000.0,
+                upload_min_percent: 20.0,
+            },
+            output: OutputSettings::default(),
+            observability: ObservabilitySettings::default(),
+            advanced_settings: AdvancedSettings::default(),
+        };
+        let mut control = FakeControl {
+            fail_upload_min: true,
+            ..FakeControl::default()
+        };
+        assert!(
+            initialize_shaper_with_settle_time(&settings, &mut control, Duration::ZERO).is_err()
+        );
+        SHUTDOWN.store(false, Ordering::Relaxed);
+        assert_eq!(
+            control.calls[2..],
+            [("ifb0".into(), 10_000), ("eth0".into(), 5_000)]
+        );
+
+        control.calls.clear();
+        control.fail_upload_min = false;
+        let (down, up) =
+            initialize_shaper_with_settle_time(&settings, &mut control, Duration::ZERO).unwrap();
+        let guard = ShaperGuard {
+            settings: &settings,
+            traffic_control: &mut control,
+            down,
+            up,
+        };
+        drop(guard);
+        SHUTDOWN.store(false, Ordering::Relaxed);
+        assert_eq!(
+            control.calls[2..],
+            [("ifb0".into(), 10_000), ("eth0".into(), 5_000)]
+        );
+    }
 }

@@ -9,7 +9,7 @@ use crate::SHUTDOWN;
 use crate::metrics::{Metric, MetricsSender};
 use crate::pinger::PingReply;
 use crate::settings::Settings;
-use flume::{Receiver, Sender};
+use flume::{Receiver, RecvTimeoutError, Sender};
 use log::{debug, info};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -165,7 +165,14 @@ impl Baseliner {
                 return Ok(());
             }
 
-            let reply = self.stats_rx.recv()?;
+            let reply = match self.stats_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(reply) => reply,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) if SHUTDOWN.load(Ordering::Relaxed) => {
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
             let reflector = reply.reflector;
             let (state, anomaly) = process_reply(
                 &mut reflectors,

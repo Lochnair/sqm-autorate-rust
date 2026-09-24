@@ -5,12 +5,16 @@
 use std::io;
 use std::str::Utf8Error;
 
-use log::info;
+use log::{info, warn};
 use netlink_bindings::{rt_link, tc};
 use netlink_socket2::NetlinkSocket;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
+use crate::SHUTDOWN;
 use crate::platform::{InterfaceStats, InterfaceStatsProvider, TrafficControlBackend};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Error)]
 pub(crate) enum NetlinkError {
@@ -36,10 +40,27 @@ pub(crate) enum NetlinkError {
     Utf8Error(#[from] Utf8Error),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Qdisc {
+    ifname: String,
     ifindex: i32,
     parent: u32,
+}
+
+impl NetlinkError {
+    fn is_qdisc_loss(&self) -> bool {
+        match self {
+            Self::InterfaceNotFound(_) | Self::NoQdiscFound(_) => true,
+            Self::Netlink(error) => {
+                matches!(error.raw_os_error(), Some(libc::ENODEV | libc::ENOENT))
+            }
+            Self::Reply(error) => matches!(
+                error.as_io_error().raw_os_error(),
+                Some(libc::ENODEV | libc::ENOENT)
+            ),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -96,6 +117,7 @@ impl Netlink {
                     == "cake"
             {
                 return Ok(Qdisc {
+                    ifname: ifname.to_owned(),
                     ifindex,
                     parent: header.parent,
                 });
@@ -111,7 +133,7 @@ impl Netlink {
     }
 
     fn set_qdisc_rate(
-        qdisc: Qdisc,
+        qdisc: &Qdisc,
         bandwidth_kbit: u64,
         dry_run: bool,
     ) -> Result<(), NetlinkError> {
@@ -167,6 +189,26 @@ impl TrafficControlBackend for Netlink {
         bandwidth_kbit: u64,
         dry_run: bool,
     ) -> Result<(), Self::Error> {
-        Self::set_qdisc_rate(*shaper, bandwidth_kbit, dry_run)
+        let mut last_warning = None;
+        loop {
+            let result = Self::qdisc_from_ifname(&shaper.ifname)
+                .and_then(|current| Self::set_qdisc_rate(&current, bandwidth_kbit, dry_run));
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) if error.is_qdisc_loss() && !SHUTDOWN.load(Ordering::Relaxed) => {
+                    if last_warning
+                        .is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(30))
+                    {
+                        warn!(
+                            "CAKE on {} is unavailable: {error}; waiting for SQM",
+                            shaper.ifname
+                        );
+                        last_warning = Some(Instant::now());
+                    }
+                    sleep(Duration::from_millis(500));
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 }
