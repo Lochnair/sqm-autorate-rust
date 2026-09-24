@@ -191,6 +191,7 @@ fn restore_shaper<T: TrafficControlBackend>(
 fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
     let configured = settings.load_reflectors()?;
     let configured_count = configured.len();
+    let requested_count = settings.advanced_settings.num_reflectors as usize;
 
     let default_reflectors = [
         IpAddr::from_str("9.9.9.9")?,
@@ -200,6 +201,17 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
         IpAddr::from_str("208.67.222.222")?,
         IpAddr::from_str("94.140.14.14")?,
     ];
+
+    let available_count = if configured.is_empty() {
+        default_reflectors.len()
+    } else {
+        configured_count
+    };
+    if available_count < requested_count {
+        anyhow::bail!(
+            "only {available_count} reflectors available, fewer than the configured {requested_count}"
+        );
+    }
 
     let reselection_enabled = configured_count > settings.advanced_settings.num_reflectors as usize;
     let (peers, pool) = if reselection_enabled {
@@ -512,6 +524,17 @@ mod tests {
         };
         let setup = setup_reflectors(&settings).unwrap();
         let configured = settings.load_reflectors().unwrap();
+        std::fs::write(
+            &path,
+            "reflector_ip,ip_version,description\n192.0.2.1,4,test\n192.0.2.2,4,test\n192.0.2.3,4,test\n192.0.2.4,4,test\n",
+        ).unwrap();
+        assert!(setup_reflectors(&settings).is_err());
+        std::fs::write(
+            &path,
+            "reflector_ip,ip_version,description\n2001:db8::1,6,test\n",
+        )
+        .unwrap();
+        assert!(setup_reflectors(&settings).is_err());
         std::fs::remove_file(path).unwrap();
         assert!(!setup.reselection_enabled);
         assert_eq!(*setup.peers.read().unwrap(), configured);

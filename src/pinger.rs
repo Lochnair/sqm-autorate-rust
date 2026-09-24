@@ -14,7 +14,7 @@ use icmp_socket2::socket::IcmpSocket;
 use icmp_socket2::{IcmpSocket4, Icmpv4Packet};
 use log::{debug, info, warn};
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -185,10 +185,15 @@ pub trait PingSender {
                 info!("Ping sender shutting down");
                 return Ok(());
             }
-            // Clone the reflectors vec and drop the read lock immediately —
-            // holding it for the entire tick would starve the reflector selector's write lock.
+            // Release the read lock before sending so reselection can update peers.
             let reflectors_unlocked = reflectors_lock.read_anyhow()?;
-            let reflectors = reflectors_unlocked.clone();
+            let reflectors: Vec<_> = reflectors_unlocked
+                .iter()
+                .filter_map(|reflector| match reflector {
+                    IpAddr::V4(addr) => Some(*addr),
+                    IpAddr::V6(_) => None,
+                })
+                .collect();
             drop(reflectors_unlocked);
 
             if reflectors.is_empty() {
@@ -202,15 +207,10 @@ pub trait PingSender {
 
             let sleep_duration = Duration::from_secs_f64(tick_interval / reflectors.len() as f64);
 
-            for reflector in reflectors.iter() {
-                let addr: Ipv4Addr = match reflector {
-                    IpAddr::V4(ipv4) => *ipv4,
-                    IpAddr::V6(_) => continue,
-                };
-
+            for &addr in &reflectors {
                 let (packet, originate_timestamp) = self.craft_packet(id, seq);
                 let sent_at = Instant::now();
-                let key = (*reflector, type_, seq);
+                let key = (IpAddr::V4(addr), type_, seq);
                 inflight.lock_anyhow()?.insert(
                     key,
                     InFlightProbe {
