@@ -32,7 +32,7 @@ use crate::settings::MeasurementType;
 use crate::settings::Settings;
 use ::log::{info, warn};
 use flume::RecvTimeoutError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -192,6 +192,9 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
     let configured = settings.load_reflectors()?;
     let configured_count = configured.len();
     let requested_count = settings.advanced_settings.num_reflectors as usize;
+    if configured.iter().collect::<HashSet<_>>().len() != configured_count {
+        anyhow::bail!("reflector list contains duplicate addresses");
+    }
 
     let default_reflectors = [
         IpAddr::from_str("9.9.9.9")?,
@@ -529,6 +532,13 @@ mod tests {
             "reflector_ip,ip_version,description\n192.0.2.1,4,test\n192.0.2.2,4,test\n192.0.2.3,4,test\n192.0.2.4,4,test\n",
         ).unwrap();
         assert!(setup_reflectors(&settings).is_err());
+        std::fs::write(
+            &path,
+            "reflector_ip,ip_version,description\n192.0.2.1,4,test\n192.0.2.2,4,test\n192.0.2.3,4,test\n192.0.2.4,4,test\n192.0.2.4,4,test\n",
+        )
+        .unwrap();
+        let error = setup_reflectors(&settings).err().unwrap();
+        assert!(error.to_string().contains("duplicate addresses"));
         std::fs::write(
             &path,
             "reflector_ip,ip_version,description\n2001:db8::1,6,test\n",
