@@ -241,44 +241,42 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 state.deltas[0]
             };
 
-            if state.delta_stat > 0.0 {
-                /*
-                 * TODO - find where the (8 / 1000) comes from and
-                 *    i. convert to a pre-computed factor
-                 *    ii. ideally, see if it can be defined in terms of constants, eg ticks per second and number of active reflectors
-                 */
-                state.utilisation = (8.0 / 1000.0)
-                    * (state.current_bytes as f64 - state.previous_bytes as f64)
-                    / dur.as_secs_f64();
-                state.load = state.utilisation / state.current_rate;
+            // A zero delay delta is a normal clean-link reading, not missing data.
+            state.utilisation = (8.0 / 1000.0)
+                * (state.current_bytes - state.previous_bytes).max(0) as f64
+                / dur.as_secs_f64();
+            state.load = if state.current_rate.is_finite() && state.current_rate > 0.0 {
+                state.utilisation / state.current_rate
+            } else {
+                0.0
+            };
 
-                if state.delta_stat < delay_ms
-                    && state.load > self.settings.advanced_settings.high_load_level
+            if state.delta_stat < delay_ms
+                && state.load > self.settings.advanced_settings.high_load_level
+            {
+                state.safe_rates[state.nrate] = (state.current_rate * state.load).floor();
+                let max_rate = state
+                    .safe_rates
+                    .iter()
+                    .max_by(|a, b| a.total_cmp(b))
+                    .unwrap();
+                state.next_rate = state.current_rate
+                    * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
+                    + (base_rate * 0.03);
+                state.nrate += 1;
+                state.nrate %= self.settings.advanced_settings.speed_hist_size as usize;
+            }
+
+            if state.delta_stat > delay_ms {
+                match state
+                    .safe_rates
+                    .get(self.rng.usize(..state.safe_rates.len()))
                 {
-                    state.safe_rates[state.nrate] = (state.current_rate * state.load).floor();
-                    let max_rate = state
-                        .safe_rates
-                        .iter()
-                        .max_by(|a, b| a.total_cmp(b))
-                        .unwrap();
-                    state.next_rate = state.current_rate
-                        * (1.0 + 0.1 * (1.0_f64 - state.current_rate / max_rate).max(0.0))
-                        + (base_rate * 0.03);
-                    state.nrate += 1;
-                    state.nrate %= self.settings.advanced_settings.speed_hist_size as usize;
-                }
-
-                if state.delta_stat > delay_ms {
-                    match state
-                        .safe_rates
-                        .get(self.rng.usize(..state.safe_rates.len()))
-                    {
-                        Some(rnd_rate) => {
-                            state.next_rate = rnd_rate.min(0.9 * state.current_rate * state.load);
-                        }
-                        None => {
-                            state.next_rate = 0.9 * state.current_rate * state.load;
-                        }
+                    Some(rnd_rate) => {
+                        state.next_rate = rnd_rate.min(0.9 * state.current_rate * state.load);
+                    }
+                    None => {
+                        state.next_rate = 0.9 * state.current_rate * state.load;
                     }
                 }
             }
@@ -297,6 +295,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
         let mut lastchg_t = Instant::now();
         let mut lastdump_t = Instant::now();
+        let mut reflector_data_missing = false;
 
         self.request_initial_rates()?;
 
@@ -337,6 +336,10 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 return Ok(());
             }
             sleep(sleep_time);
+            if SHUTDOWN.load(Ordering::Relaxed) {
+                info!("Rate controller shutting down");
+                return Ok(());
+            }
             let now_t = Instant::now();
 
             if now_t.duration_since(lastchg_t).as_secs_f64()
@@ -352,13 +355,16 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 self.update_deltas()?;
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
-                    warn!("No reflector data available, dropping to minimum rates");
-                    self.metrics.send(Metric::Event {
-                        name: "reflector_unavailable",
-                        reason: "",
-                        reflector: None,
-                        tags: &[],
-                    });
+                    if !reflector_data_missing {
+                        warn!("No reflector data available, dropping to minimum rates");
+                        self.metrics.send(Metric::Event {
+                            name: "reflector_unavailable",
+                            reason: "",
+                            reflector: None,
+                            tags: &[],
+                        });
+                        reflector_data_missing = true;
+                    }
                     self.state_dl.next_rate = self.settings.network.download_min_kbits();
                     self.state_ul.next_rate = self.settings.network.upload_min_kbits();
 
@@ -376,6 +382,17 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     self.state_dl.current_rate = self.state_dl.next_rate;
                     self.state_ul.current_rate = self.state_ul.next_rate;
                     continue;
+                }
+
+                if reflector_data_missing {
+                    info!("Reflector data restored, resuming rate control");
+                    self.metrics.send(Metric::Event {
+                        name: "reflector_available",
+                        reason: "",
+                        reflector: None,
+                        tags: &[],
+                    });
+                    reflector_data_missing = false;
                 }
 
                 self.calculate_rate(Direction::Down)?;
@@ -494,7 +511,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
 
         if self.state_dl.deltas.len() < 5 || self.state_ul.deltas.len() < 5 {
             // trigger reselection
-            warn!(
+            debug!(
                 "Not enough delta values (D: {}, U: {}, need 5), triggering reselection",
                 self.state_dl.deltas.len(),
                 self.state_ul.deltas.len()
@@ -531,7 +548,80 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
 mod tests {
     use super::*;
     use crate::baseliner::{EwmaStats, ReflectorState};
+    use crate::platform::InterfaceStats;
+    use crate::settings::{
+        AdvancedSettings, NetworkSettings, ObservabilitySettings, OutputSettings,
+    };
     use std::collections::HashMap;
+    use std::convert::Infallible;
+    use std::sync::{Arc, RwLock};
+
+    struct FixedStats;
+
+    impl InterfaceStatsProvider for FixedStats {
+        type Error = Infallible;
+
+        fn read_stats(&mut self, _: &str) -> Result<InterfaceStats, Self::Error> {
+            Ok(InterfaceStats {
+                rx_bytes: 0,
+                tx_bytes: 0,
+            })
+        }
+    }
+
+    struct FakeShaper;
+
+    impl TrafficControlBackend for FakeShaper {
+        type Error = Infallible;
+        type Handle = ();
+
+        fn find_shaper(&mut self, _: &str) -> Result<Self::Handle, Self::Error> {
+            Ok(())
+        }
+
+        fn set_rate(&mut self, _: &Self::Handle, _: u64, _: bool) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn clean_link_at_minimum_rate_can_recover_under_load() {
+        let settings = Settings {
+            network: NetworkSettings {
+                download_interface: "ifb0".into(),
+                upload_interface: "eth0".into(),
+                download_base_kbits: 10_000.0,
+                download_min_percent: 20.0,
+                upload_base_kbits: 5_000.0,
+                upload_min_percent: 20.0,
+            },
+            output: OutputSettings::default(),
+            observability: ObservabilitySettings::default(),
+            advanced_settings: AdvancedSettings::default(),
+        };
+        let (_snapshot_tx, snapshot_rx) = flume::unbounded();
+        let (reselect_tx, _reselect_rx) = flume::unbounded();
+        let mut controller = Ratecontroller::new_with_backends(
+            settings,
+            snapshot_rx,
+            Arc::new(RwLock::new(Vec::new())),
+            reselect_tx,
+            MetricsSender::disabled(),
+            FixedStats,
+            FakeShaper,
+            fastrand::Rng::with_seed(1),
+        )
+        .unwrap();
+        controller.state_dl.current_rate = 2_000.0;
+        controller.state_dl.current_bytes = 300_000;
+        controller.state_dl.prev_t = Instant::now() - Duration::from_secs(1);
+        controller.state_dl.deltas = vec![0.0; 5];
+
+        controller.calculate_rate(Direction::Down).unwrap();
+
+        assert!(controller.state_dl.load > 0.8);
+        assert!(controller.state_dl.next_rate > 2_000.0);
+    }
 
     #[test]
     fn fixed_seed_reproduces_initial_safe_rates() {
