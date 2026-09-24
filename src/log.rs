@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
+use log::{Level, Metadata, Record, SetLoggerError};
 use rustix::time::ClockId;
 
 use crate::time::Time;
@@ -36,5 +36,5 @@ impl log::Log for SimpleLogger {
 
 pub fn init(level: Level) -> Result<(), SetLoggerError> {
     log::set_boxed_logger(Box::new(SimpleLogger { level }))
-        .map(|()| log::set_max_level(LevelFilter::Trace))
+        .map(|()| log::set_max_level(level.to_level_filter()))
 }
