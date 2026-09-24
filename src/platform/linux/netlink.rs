@@ -191,10 +191,14 @@ impl TrafficControlBackend for Netlink {
         bandwidth_kbit: u64,
         dry_run: bool,
     ) -> Result<(), Self::Error> {
+        if dry_run {
+            return Self::set_qdisc_rate(shaper, bandwidth_kbit, true);
+        }
+
         let mut last_warning = None;
         loop {
             let result = Self::qdisc_from_ifname(&shaper.ifname)
-                .and_then(|current| Self::set_qdisc_rate(&current, bandwidth_kbit, dry_run));
+                .and_then(|current| Self::set_qdisc_rate(&current, bandwidth_kbit, false));
             match result {
                 Ok(()) => return Ok(()),
                 Err(error) if error.is_qdisc_loss() && !SHUTDOWN.load(Ordering::Relaxed) => {
