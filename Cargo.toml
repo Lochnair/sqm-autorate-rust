@@ -2,6 +2,7 @@
 name = "sqm-autorate-rust"
 version = "0.4.1"
 edition = "2024"
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -40,7 +41,7 @@ netlink-bindings = { version = "0.3.3", features = ["rt-link", "tc"] }
 netlink-socket2 = { version = "0.3.3" }
 
 [target.'cfg(unix)'.dependencies]
-rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "fcfedd204fb76928ef617bf9631b041c816e03d4", optional = true, default-features = false, }
+rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "fcfedd204fb76928ef617bf9631b041c816e03d4", optional = true, default-features = false }
 
 [features]
 default = ["toml", "uci-vendored"]

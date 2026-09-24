@@ -114,30 +114,12 @@ impl UciSource {
         }
     }
 
-    fn mapped_config_key(
-        &self,
-        selector: &SectionSelector<'_>,
-        uci_option: &str,
-    ) -> Option<String> {
-        let section_type = match selector {
-            SectionSelector::Anonymous {
-                section_type,
-                index,
-            } if *index == 0 => *section_type,
-
-            SectionSelector::Anonymous { .. } | SectionSelector::Named(_) => return None,
-        };
-
-        self.schema
+    fn mapped_config_key(section: &UciSectionMapping, uci_option: &str) -> Option<String> {
+        section
+            .options
             .iter()
-            .filter(|section| section.uci_section == section_type)
-            .find_map(|section| {
-                section
-                    .options
-                    .iter()
-                    .find(|option| option.uci_option == uci_option)
-                    .map(|option| format!("{}.{}", section.config_section, option.config_field,))
-            })
+            .find(|option| option.uci_option == uci_option)
+            .map(|option| format!("{}.{}", section.config_section, option.config_field))
     }
 
     fn collect_package(
@@ -146,14 +128,35 @@ impl UciSource {
         package: &UciPackage,
         values: &mut Map<String, Value>,
     ) -> Result<(), SourceError> {
-        let sections = package.sections().map_err(|e| {
-            SourceError::Message(format!(
-                "failed to retrieve sections from UCI package \
+        let sections: Vec<_> = package
+            .sections()
+            .map_err(|e| {
+                SourceError::Message(format!(
+                    "failed to retrieve sections from UCI package \
                  {package_name:?}: {e}"
-            ))
-        })?;
+                ))
+            })?
+            .collect();
+
+        for mapping in self.schema {
+            if sections
+                .iter()
+                .filter(|section| section.type_() == mapping.uci_section)
+                .count()
+                > 1
+            {
+                return Err(SourceError::Message(format!(
+                    "UCI package {package_name:?} declares multiple `{}` sections; exactly one is expected",
+                    mapping.uci_section
+                )));
+            }
+        }
 
         for section in sections {
+            let mapping = self
+                .schema
+                .iter()
+                .find(|entry| entry.uci_section == section.type_());
             let selector = section.selector().ok_or_else(|| {
                 SourceError::Message(format!(
                     "loaded UCI section of type {:?} in package \
@@ -181,9 +184,14 @@ impl UciSource {
 
                 let source_key = format!("{package_name}.{config_relative_key}");
 
-                let destination_key = self
-                    .mapped_config_key(&selector, option_name)
-                    .unwrap_or(source_key);
+                let destination_key = mapping
+                    .and_then(|entry| Self::mapped_config_key(entry, option_name))
+                    .unwrap_or_else(|| {
+                        if mapping.is_some() {
+                            eprintln!("warning: {uci_key}: unknown option; it will be ignored");
+                        }
+                        source_key
+                    });
 
                 let Some(value) = option.get().map_err(|e| {
                     SourceError::Message(format!(
@@ -262,7 +270,7 @@ impl Source for UciSource {
         let (_uci, packages) = match resolved {
             Ok(resolved) => resolved,
 
-            Err(_) if !self.required => {
+            Err(SourceError::NotFound(_)) if !self.required => {
                 return Ok(Map::new());
             }
 
@@ -283,5 +291,77 @@ impl Source for UciSource {
         }
 
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Settings;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new(contents: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "sqma-uci-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(root.join("config")).unwrap();
+            fs::create_dir_all(root.join("save")).unwrap();
+            fs::write(root.join("config/sqm-autorate-rust"), contents).unwrap();
+            Self(root)
+        }
+
+        fn collect(&self) -> Result<Map<String, Value>, SourceError> {
+            Source::collect(
+                &UciSource::from_schema::<Settings>()
+                    .with_directories(self.0.join("config"), self.0.join("save"))
+                    .required(false),
+            )
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn malformed_uci_is_not_treated_as_absent() {
+        let fixture = Fixture::new("config network 'unterminated\n");
+        assert!(fixture.collect().is_err());
+    }
+
+    #[test]
+    fn named_sections_are_mapped_and_mixed_sections_are_rejected() {
+        let named = Fixture::new("config network 'primary'\n option download_interface 'ifb0'\n");
+        let values = named.collect().unwrap();
+        assert_eq!(
+            values
+                .get("network.download_interface")
+                .unwrap()
+                .clone()
+                .into_string()
+                .unwrap(),
+            "ifb0"
+        );
+
+        let mixed = Fixture::new(
+            "config network 'primary'\n option download_interface 'ifb0'\nconfig network\n option upload_interface 'eth0'\n",
+        );
+        assert!(
+            mixed
+                .collect()
+                .unwrap_err()
+                .to_string()
+                .contains("multiple `network` sections")
+        );
     }
 }

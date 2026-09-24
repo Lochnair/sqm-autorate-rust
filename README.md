@@ -16,7 +16,7 @@ You can install **sqm‑autorate‑rust** in two ways:
 
 ### 1. Native Rust build
 
-1. Ensure you have the Rust toolchain (1.70+), Cargo, and `libnl` headers installed on your Linux host.
+1. Ensure you have Rust 1.88 or newer, Cargo, and a C toolchain for libuci on your Linux host.
 2. Clone and build:
 
    ```bash

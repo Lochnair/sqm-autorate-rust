@@ -153,7 +153,12 @@ impl NetworkSettings {
         if download_base_valid && download_percent_valid {
             let minimum = self.download_min_kbits();
 
-            if minimum < WARN_DOWNLOAD_MIN_KBITS {
+            if minimum < 1.0 {
+                report.error(
+                    "network.download_min_percent",
+                    "minimum download rate floors to zero",
+                );
+            } else if minimum < WARN_DOWNLOAD_MIN_KBITS {
                 report.warning(
                     "network.download_min_percent",
                     format!(
@@ -168,7 +173,12 @@ impl NetworkSettings {
         if upload_base_valid && upload_percent_valid {
             let minimum = self.upload_min_kbits();
 
-            if minimum < WARN_UPLOAD_MIN_KBITS {
+            if minimum < 1.0 {
+                report.error(
+                    "network.upload_min_percent",
+                    "minimum upload rate floors to zero",
+                );
+            } else if minimum < WARN_UPLOAD_MIN_KBITS {
                 report.warning(
                     "network.upload_min_percent",
                     format!(
