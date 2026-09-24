@@ -229,9 +229,19 @@ impl ReflectorSelector {
             candidates.sort_by(|a, b| a.1.cmp(&b.1));
 
             // Now we will just limit the candidates down to 2 * num_reflectors
-            let mut num_reflectors = self.settings.advanced_settings.num_reflectors;
+            let num_reflectors = self.settings.advanced_settings.num_reflectors;
             let candidate_pool_num = (2 * num_reflectors) as usize;
             candidates.truncate(candidate_pool_num);
+
+            if candidates.len() < num_reflectors as usize {
+                log::warn!(
+                    "Reselection found {}/{} responsive peers; retaining the current peers",
+                    candidates.len(),
+                    num_reflectors
+                );
+                *reflectors_peers = previous_peers;
+                continue;
+            }
 
             for (candidate, rtt) in candidates.iter() {
                 info!("Fastest candidate {}: {}", candidate, rtt);
@@ -241,10 +251,6 @@ impl ReflectorSelector {
             for i in (1_usize..candidates.len()).rev() {
                 let j = fastrand::usize(0..=i);
                 candidates.swap(i, j);
-            }
-
-            if (candidates.len() as u8) < num_reflectors {
-                num_reflectors = candidates.len() as u8;
             }
 
             let mut new_peers = Vec::new();
@@ -260,11 +266,6 @@ impl ReflectorSelector {
                 });
             }
 
-            if new_peers.is_empty() {
-                log::warn!("Reselection found no responsive peers; retaining the current peers");
-                *reflectors_peers = previous_peers;
-                continue;
-            }
             *reflectors_peers = new_peers;
         }
     }
@@ -274,6 +275,9 @@ impl ReflectorSelector {
 mod tests {
     use super::*;
     use crate::baseliner::{EwmaStats, ReflectorState};
+    use crate::settings::{
+        AdvancedSettings, NetworkSettings, ObservabilitySettings, OutputSettings,
+    };
     use std::collections::HashMap;
     use std::thread;
 
@@ -423,5 +427,58 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn reselection_keeps_peers_when_fewer_than_configured_respond() {
+        let previous_peers: Vec<IpAddr> = (1..=5)
+            .map(|last| IpAddr::from([192, 0, 2, last]))
+            .collect();
+        let candidate = IpAddr::from([192, 0, 2, 6]);
+        let peers = Arc::new(RwLock::new(previous_peers.clone()));
+        let (trigger_tx, trigger_rx) = flume::unbounded();
+        let (snapshot_tx, snapshot_rx) = flume::unbounded();
+        trigger_tx.send(true).unwrap();
+        drop(trigger_tx);
+
+        let producer_peers = Arc::clone(&peers);
+        let producer = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !producer_peers.read().unwrap().contains(&candidate) {
+                assert!(Instant::now() < deadline);
+                sleep(Duration::from_millis(1));
+            }
+            snapshot_tx
+                .send(snapshot_with_rtt(Instant::now(), candidate, 20.0))
+                .unwrap();
+        });
+
+        let selector = ReflectorSelector {
+            settings: Settings {
+                network: NetworkSettings {
+                    download_interface: "ifb0".into(),
+                    upload_interface: "eth0".into(),
+                    download_base_kbits: 10_000.0,
+                    download_min_percent: 20.0,
+                    upload_base_kbits: 5_000.0,
+                    upload_min_percent: 20.0,
+                },
+                output: OutputSettings::default(),
+                observability: ObservabilitySettings::default(),
+                advanced_settings: AdvancedSettings {
+                    tick_interval: 0.1,
+                    ..AdvancedSettings::default()
+                },
+            },
+            snapshot_rx,
+            reflector_peers_lock: Arc::clone(&peers),
+            reflector_pool: vec![candidate],
+            trigger_channel: trigger_rx,
+            metrics: MetricsSender::disabled(),
+        };
+        selector.run().unwrap();
+        producer.join().unwrap();
+
+        assert_eq!(*peers.read().unwrap(), previous_peers);
     }
 }
