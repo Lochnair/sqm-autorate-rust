@@ -153,7 +153,12 @@ impl NetworkSettings {
         if download_base_valid && download_percent_valid {
             let minimum = self.download_min_kbits();
 
-            if minimum < WARN_DOWNLOAD_MIN_KBITS {
+            if minimum < 1.0 {
+                report.error(
+                    "network.download_min_percent",
+                    "minimum download rate floors to zero",
+                );
+            } else if minimum < WARN_DOWNLOAD_MIN_KBITS {
                 report.warning(
                     "network.download_min_percent",
                     format!(
@@ -168,7 +173,12 @@ impl NetworkSettings {
         if upload_base_valid && upload_percent_valid {
             let minimum = self.upload_min_kbits();
 
-            if minimum < WARN_UPLOAD_MIN_KBITS {
+            if minimum < 1.0 {
+                report.error(
+                    "network.upload_min_percent",
+                    "minimum upload rate floors to zero",
+                );
+            } else if minimum < WARN_UPLOAD_MIN_KBITS {
                 report.warning(
                     "network.upload_min_percent",
                     format!(
@@ -374,5 +384,40 @@ fn validate_percent(report: &mut ValidationReport, path: &'static str, value: f6
         false
     } else {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn network(download_base_kbits: f64, upload_base_kbits: f64) -> NetworkSettings {
+        NetworkSettings {
+            download_interface: "ifb0".into(),
+            upload_interface: "eth0".into(),
+            download_base_kbits,
+            download_min_percent: 1.0,
+            upload_base_kbits,
+            upload_min_percent: 1.0,
+        }
+    }
+
+    #[test]
+    fn minimum_rates_that_floor_to_zero_are_errors_for_both_directions() {
+        let mut report = ValidationReport::default();
+        network(50.0, 50.0).validate(&mut report);
+        let error = report.finish().unwrap_err().to_string();
+
+        assert!(error.contains("network.download_min_percent"));
+        assert!(error.contains("network.upload_min_percent"));
+        assert!(error.contains("floors to zero"));
+    }
+
+    #[test]
+    fn representable_low_minimum_rates_remain_warnings() {
+        let mut report = ValidationReport::default();
+        network(10_000.0, 10_000.0).validate(&mut report);
+
+        assert!(report.finish().is_ok());
     }
 }
