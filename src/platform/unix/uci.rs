@@ -262,7 +262,7 @@ impl Source for UciSource {
         let (_uci, packages) = match resolved {
             Ok(resolved) => resolved,
 
-            Err(_) if !self.required => {
+            Err(SourceError::NotFound(_)) if !self.required => {
                 return Ok(Map::new());
             }
 
@@ -283,5 +283,31 @@ impl Source for UciSource {
         }
 
         Ok(values)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Settings;
+    use std::fs;
+
+    #[test]
+    fn malformed_optional_package_is_an_error() {
+        let root = std::env::temp_dir().join(format!("sqma-uci-{}", std::process::id()));
+        let config_dir = root.join("config");
+        let save_dir = root.join("save");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::create_dir_all(&save_dir).unwrap();
+        let config_file = config_dir.join("sqm-autorate-rust");
+        fs::write(&config_file, "config network 'unterminated\n").unwrap();
+
+        let source = UciSource::from_schema::<Settings>()
+            .with_directories(&config_dir, &save_dir)
+            .required(false);
+        let result = source.collect();
+
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.is_err());
     }
 }
