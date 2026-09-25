@@ -192,7 +192,10 @@ impl Settings {
             })?;
 
             match (record.ip_version, record.reflector_ip) {
-                (4, IpAddr::V4(_)) | (6, IpAddr::V6(_)) => {}
+                (4, IpAddr::V4(_)) => {}
+                (6, address @ IpAddr::V6(_)) => {
+                    bail!("reflector {address} is IPv6; only IPv4 reflectors are supported");
+                }
                 (version, address) => {
                     bail!("reflector {address} has inconsistent IP version {version}");
                 }
