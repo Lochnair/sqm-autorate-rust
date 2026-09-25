@@ -1,0 +1,63 @@
+name: Supply chain
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "41 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ACTIONLINT_VERSION: 1.7.7
+  CARGO_DENY_VERSION: 0.20.2
+
+jobs:
+  cargo-deny:
+    name: cargo-deny ${{ matrix.checks }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - checks: advisories
+            continue-on-error: true
+          - checks: bans licenses sources
+            continue-on-error: false
+    continue-on-error: ${{ matrix.continue-on-error }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked
+      - name: Run cargo-deny
+        run: cargo deny --manifest-path Cargo.toml --all-features check ${{ matrix.checks }}
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        run: go install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"
+      - name: Check workflow syntax
+        run: |
+          "$(go env GOPATH)/bin/actionlint" \
+            .gitea/workflows/ci.yml \
+            .gitea/workflows/supply-chain.yml \
+            .github/workflows/actions-security.yml \
+            .github/workflows/ci-arm.yml \
+            .github/workflows/devskim.yml \
+            .github/workflows/osv-scanner.yml \
+            .github/workflows/rust-clippy.yml

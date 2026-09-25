@@ -1,0 +1,110 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2
+        with:
+          components: rustfmt
+          cache: false
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2
+        with:
+          components: clippy
+          cache: false
+      - name: Run clippy with all features
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Run clippy without default features
+        run: cargo clippy --workspace --all-targets --no-default-features --features toml --locked -- -D warnings
+
+  verify:
+    name: cargo ${{ matrix.task }} (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - task: check
+            target: x86_64-unknown-linux-gnu
+            musl: false
+          - task: test
+            target: x86_64-unknown-linux-gnu
+            musl: false
+          - task: check
+            target: x86_64-unknown-linux-musl
+            musl: true
+          - task: test
+            target: x86_64-unknown-linux-musl
+            musl: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install musl toolchain
+        if: matrix.musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends musl-tools
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2
+        with:
+          target: ${{ matrix.target }}
+          cache: false
+      - name: Run ${{ matrix.task }} with all features
+        run: cargo ${{ matrix.task }} --workspace --all-targets --all-features --target ${{ matrix.target }} --locked
+      - name: Run ${{ matrix.task }} without default features
+        run: cargo ${{ matrix.task }} --workspace --all-targets --no-default-features --features toml --target ${{ matrix.target }} --locked
+
+  docs:
+    name: cargo doc
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2
+        with:
+          cache: false
+      - name: Check documentation
+        run: cargo doc --workspace --all-features --no-deps --locked
+      - name: Run doctests
+        run: cargo test --workspace --doc --all-features --locked

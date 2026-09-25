@@ -1,0 +1,50 @@
+# cargo-deny policy for sqm-autorate-rust.
+# Keep published dependency sources and license terms explicit while allowing
+# advisory reports to be reviewed without blocking unrelated changes.
+
+[graph]
+all-features = true
+no-default-features = false
+targets = []
+
+[output]
+feature-depth = 1
+
+[advisories]
+yanked = "deny"
+unmaintained = "workspace"
+unsound = "workspace"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "rev"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/Lochnair/rust-uci"]
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
