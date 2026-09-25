@@ -16,7 +16,7 @@ env:
 jobs:
   verify:
     name: cargo ${{ matrix.task }} (${{ matrix.target }})
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 30
     strategy:
       fail-fast: false
