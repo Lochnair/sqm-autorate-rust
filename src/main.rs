@@ -22,6 +22,10 @@ mod time;
 mod util;
 
 use crate::baseliner::Baseliner;
+use crate::measurement::icmp::{IcmpBinding, IcmpEngine};
+use crate::measurement::model::{
+    MeasurementSource, MeasurementStream, MeasurementStreamId, ProbeSchedule,
+};
 use crate::metrics::{Metric, Metrics, MetricsSender};
 use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
 use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
@@ -34,7 +38,7 @@ use crate::settings::Settings;
 use ::log::{info, warn};
 use flume::RecvTimeoutError;
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -245,6 +249,22 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
 
     let start_time = Instant::now();
     let probe_id = probe_identifier();
+
+    let (ie_txt, _) = flume::unbounded();
+    let (binding_tx, binding_rx) = flume::unbounded();
+    let engine = IcmpEngine::new(start_time, &settings.network, ie_txt, binding_rx)?;
+    binding_tx.send(vec![IcmpBinding::new(
+        MeasurementStream {
+            id: MeasurementStreamId(0),
+            peer: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            source: MeasurementSource::IcmpEcho,
+        },
+        ProbeSchedule {
+            period: Duration::from_secs(1),
+            offset: Duration::from_secs(0),
+        },
+    )])?;
+    engine.run()?;
 
     let ReflectorSetup {
         peers: reflector_peers,

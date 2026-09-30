@@ -219,8 +219,11 @@ pub(crate) struct NetworkSettings {
     #[serde(default = "default_min_percent")]
     pub(crate) upload_min_percent: f64,
 
+    #[allow(dead_code)]
     pub(crate) measurement_bind_device: Option<String>,
+    #[allow(dead_code)]
     pub(crate) measurement_mark: Option<u32>,
+    #[allow(dead_code)]
     pub(crate) measurement_fib: Option<u32>,
 }
 

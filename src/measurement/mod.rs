@@ -1,2 +1,2 @@
-mod icmp;
-mod model;
+pub(crate) mod icmp;
+pub(crate) mod model;
