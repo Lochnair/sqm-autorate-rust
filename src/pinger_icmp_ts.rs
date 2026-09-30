@@ -7,7 +7,7 @@
 
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::settings::MeasurementType;
-use crate::time::Time;
+use crate::time::{ClockSample, Realtime};
 use icmp_socket2::Icmpv4Message;
 use icmp_socket2::Icmpv4Packet;
 use icmp_socket2::packet::WithTimestampRequest;
@@ -66,7 +66,7 @@ impl PingListener for PingerICMPTimestampListener {
                     }
 
                     let time_since_midnight =
-                        Time::new(ClockId::Realtime).get_time_since_midnight();
+                        ClockSample::<Realtime>::now().as_time_since_midnight();
 
                     let rtt = timestamp_delta(time_since_midnight, originate as i64) as f64;
                     let dl_time = timestamp_delta(time_since_midnight, transmit as i64) as f64;
@@ -99,7 +99,7 @@ impl PingListener for PingerICMPTimestampListener {
 
 impl PingSender for PingerICMPTimestampSender {
     fn craft_packet(&self, id: u16, seq: u16) -> (Icmpv4Packet, i64) {
-        let time_since_midnight = Time::new(ClockId::Realtime).get_time_since_midnight();
+        let time_since_midnight = ClockSample::<Realtime>::now().as_time_since_midnight();
         (
             Icmpv4Packet::with_timestamp_request(id, seq, time_since_midnight as u32, 0, 0)
                 .unwrap(),

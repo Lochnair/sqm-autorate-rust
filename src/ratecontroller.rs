@@ -13,7 +13,7 @@ use crate::platform::{
     interface_stats_provider, traffic_control_backend,
 };
 use crate::settings::Settings;
-use crate::time::Time;
+use crate::time::{ClockSample, Realtime};
 use crate::util::{ArcRwLock, RwLockExt};
 use flume::{Receiver, Sender};
 use log::{debug, info, warn};
@@ -409,7 +409,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 self.state_dl.current_rate = self.state_dl.next_rate;
                 self.state_ul.current_rate = self.state_ul.next_rate;
 
-                let stats_time = Time::new(ClockId::Realtime);
+                let stats_time = ClockSample::<Realtime>::now();
                 debug!(
                     "{},{},{},{},{},{},{},{}",
                     stats_time.secs(),
@@ -459,7 +459,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 && now_t.duration_since(lastdump_t).as_secs_f64() > 300.0
             {
                 for i in 0..self.settings.advanced_settings.speed_hist_size as usize {
-                    let hist_time = Time::new(ClockId::Realtime);
+                    let hist_time = ClockSample::<Realtime>::now();
                     if let Err(e) = fd.write_all(
                         format!(
                             "{},{},{},{}\n",

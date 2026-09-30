@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::pinger::{PingError, PingListener, PingReply, PingSender};
 use crate::settings::MeasurementType;
-use crate::time::Time;
+use crate::time::{ClockSample, Monotonic};
 use icmp_socket2::Icmpv4Message;
 use icmp_socket2::Icmpv4Packet;
 use icmp_socket2::packet::WithEchoRequest;
@@ -54,7 +54,7 @@ impl PingListener for PingerICMPEchoListener {
                         }
                     };
 
-                    let clock = Time::new(ClockId::Monotonic);
+                    let clock = ClockSample::<Monotonic>::now();
                     let time_ms = clock.to_milliseconds() as i64;
 
                     let rtt = (time_ms - time_sent) as f64;
@@ -85,7 +85,7 @@ impl PingListener for PingerICMPEchoListener {
 
 impl PingSender for PingerICMPEchoSender {
     fn craft_packet(&self, id: u16, seq: u16) -> (Icmpv4Packet, i64) {
-        let clock = Time::new(ClockId::Monotonic);
+        let clock = ClockSample::<Monotonic>::now();
         let time_ms = clock.to_milliseconds();
         let payload = time_ms.to_be_bytes().to_vec();
 

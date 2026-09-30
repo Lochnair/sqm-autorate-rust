@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use log::{Level, Metadata, Record, SetLoggerError};
-use rustix::time::ClockId;
 
-use crate::time::Time;
+use crate::time::{ClockSample, Realtime};
 
 #[derive(Clone, Copy)]
 pub struct SimpleLogger {
@@ -19,7 +18,7 @@ impl log::Log for SimpleLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            let now = Time::new(ClockId::Realtime);
+            let now = ClockSample::<Realtime>::now();
             println!(
                 "{} {:5} {}:{}: {}",
                 now.as_secs_f64(),

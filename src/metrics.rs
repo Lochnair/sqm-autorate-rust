@@ -4,7 +4,7 @@
 
 use crate::settings::Settings;
 use crate::settings::{MeasurementType, ObservabilityProtocol};
-use crate::time::Time;
+use crate::time::{ClockSample, Realtime};
 use flume::{Receiver, RecvTimeoutError, Sender};
 use log::{error, info, warn};
 use rustix::time::ClockId;
@@ -148,7 +148,7 @@ impl MetricsSender {
 
     pub fn send(&self, metric: Metric) {
         if let Some(ref tx) = self.tx {
-            let ts = Time::new(ClockId::Realtime).as_nanos();
+            let ts = ClockSample::<Realtime>::now().as_nanos();
             if tx.try_send((metric, ts)).is_err() {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
@@ -197,7 +197,7 @@ impl Metrics {
                 Err(RecvTimeoutError::Timeout) => {
                     let dropped = self.metrics_dropped.swap(0, Ordering::Relaxed);
                     if dropped > 0 {
-                        let ts = Time::new(ClockId::Realtime).as_nanos();
+                        let ts = ClockSample::<Realtime>::now().as_nanos();
                         batch.push((Metric::Dropped { count: dropped }, ts));
                     }
                     if !batch.is_empty() {
