@@ -218,6 +218,10 @@ pub(crate) struct NetworkSettings {
     pub(crate) upload_base_kbits: f64,
     #[serde(default = "default_min_percent")]
     pub(crate) upload_min_percent: f64,
+
+    pub(crate) measurement_bind_device: Option<String>,
+    pub(crate) measurement_mark: Option<u32>,
+    pub(crate) measurement_fib: Option<u32>,
 }
 
 impl NetworkSettings {
