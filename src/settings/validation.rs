@@ -399,6 +399,9 @@ mod tests {
             download_min_percent: 1.0,
             upload_base_kbits,
             upload_min_percent: 1.0,
+            measurement_bind_device: None,
+            measurement_mark: None,
+            measurement_fib: None,
         }
     }
 
