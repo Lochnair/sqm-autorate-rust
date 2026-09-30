@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use rustix::time::{ClockId, clock_gettime};
 
@@ -62,5 +65,19 @@ impl<C: Clock> ClockSample<C> {
 impl ClockSample<Realtime> {
     pub fn as_time_since_midnight(&self) -> i64 {
         (self.time_s as i64 % 86_400 * 1000) + self.time_ns as i64 / 1_000_000
+    }
+}
+
+impl From<SystemTime> for ClockSample<Realtime> {
+    fn from(time: SystemTime) -> Self {
+        let duration = time
+            .duration_since(UNIX_EPOCH)
+            .expect("realtime timestamp predates Unix epoch");
+
+        Self {
+            time_s: duration.as_secs(),
+            time_ns: u64::from(duration.subsec_nanos()),
+            _clock: PhantomData,
+        }
     }
 }
