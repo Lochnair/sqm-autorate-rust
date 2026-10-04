@@ -264,7 +264,9 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             offset: Duration::from_secs(0),
         },
     )])?;
-    engine.run()?;
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.spawn(engine.run());
 
     let ReflectorSetup {
         peers: reflector_peers,
