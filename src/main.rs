@@ -243,6 +243,8 @@ fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()
 }
 
 fn run(settings: &Settings) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
     if settings.advanced_settings.dry_run {
         info!("*** MONITORING MODE ACTIVE — qdisc rates will NOT be changed ***");
     }
@@ -252,7 +254,10 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
 
     let (ie_txt, _) = flume::unbounded();
     let (binding_tx, binding_rx) = flume::unbounded();
-    let engine = IcmpEngine::new(start_time, &settings.network, ie_txt, binding_rx)?;
+    let engine = {
+        let _guard = rt.enter();
+        IcmpEngine::new(start_time, &settings.network, ie_txt, binding_rx)?
+    };
     binding_tx.send(vec![IcmpBinding::new(
         MeasurementStream {
             id: MeasurementStreamId(0),
@@ -265,7 +270,6 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         },
     )])?;
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
     rt.spawn(engine.run());
 
     let ReflectorSetup {

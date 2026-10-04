@@ -229,9 +229,7 @@ impl IcmpEngine {
                 .get_mut(&stream_id)
                 .expect("due binding disappeared");
 
-            while binding.next_probe_at <= now {
-                binding.next_probe_at += binding.schedule.period;
-            }
+            binding.next_probe_at = binding.schedule.next_probe_at(self.origin, now);
         }
 
         Ok(())
@@ -318,8 +316,6 @@ impl IcmpEngine {
                 receive,
                 transmit,
             } => {
-                const NON_STANDARD_TIMESTAMP: u32 = 1 << 31;
-
                 if identifier != self.identifier {
                     return Err(IcmpError::WrongIdentifier {
                         expected: self.identifier,
@@ -327,7 +323,10 @@ impl IcmpEngine {
                     });
                 }
 
-                if receive & NON_STANDARD_TIMESTAMP != 0 || transmit & NON_STANDARD_TIMESTAMP != 0 {
+                if originate >= MS_PER_DAY as u32
+                    || receive >= MS_PER_DAY as u32
+                    || transmit >= MS_PER_DAY as u32
+                {
                     return Err(IcmpError::InvalidPacket(
                         "non-standard RFC 792 timestamp".into(),
                     ));
@@ -365,8 +364,8 @@ impl IcmpEngine {
         }
     }
 
-    fn expire_inflight(&mut self, now: Instant) -> Result<(), IcmpError> {
-        const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+    async fn expire_inflight(&mut self, now: Instant) -> Result<(), IcmpError> {
+        const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
         let expired = {
             let mut expired = Vec::new();
@@ -385,11 +384,12 @@ impl IcmpEngine {
 
         for probe in expired {
             self.observation_tx
-                .send(MeasurementEvent::Loss(MeasurementLoss {
+                .send_async(MeasurementEvent::Loss(MeasurementLoss {
                     stream: probe.stream,
                     started_at: probe.sent_at,
                     detected_at: now,
                 }))
+                .await
                 .map_err(|_| IcmpError::EventChannelClosed)?;
         }
 
@@ -432,7 +432,8 @@ impl IcmpEngine {
                     ) {
                         Ok(observation) => {
                             self.observation_tx
-                                .send(MeasurementEvent::Observation(observation))
+                                .send_async(MeasurementEvent::Observation(observation))
+                                .await
                                 .map_err(|_| IcmpError::EventChannelClosed)?;
                         }
 
@@ -449,7 +450,7 @@ impl IcmpEngine {
                 }
 
                 _ = housekeeping.tick() => {
-                    self.expire_inflight(Instant::now())?;
+                    self.expire_inflight(Instant::now()).await?;
                 }
             }
         }
