@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use rustix::time::{ClockId, clock_gettime};
 
-trait Clock {
+pub trait Clock {
     const ID: ClockId;
 }
 

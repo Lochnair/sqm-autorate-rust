@@ -17,7 +17,6 @@ use crate::time::{ClockSample, Realtime};
 use crate::util::{ArcRwLock, RwLockExt};
 use flume::{Receiver, Sender};
 use log::{debug, info, warn};
-use rustix::time::ClockId;
 use std::fs::File;
 use std::io::Write;
 use std::net::IpAddr;

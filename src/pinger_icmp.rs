@@ -14,7 +14,6 @@ use crate::time::{ClockSample, Monotonic};
 use icmp_socket2::Icmpv4Message;
 use icmp_socket2::Icmpv4Packet;
 use icmp_socket2::packet::WithEchoRequest;
-use rustix::time::ClockId;
 
 pub struct PingerICMPEchoListener {}
 

@@ -7,7 +7,6 @@ use crate::settings::{MeasurementType, ObservabilityProtocol};
 use crate::time::{ClockSample, Realtime};
 use flume::{Receiver, RecvTimeoutError, Sender};
 use log::{error, info, warn};
-use rustix::time::ClockId;
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
 use std::sync::Arc;
