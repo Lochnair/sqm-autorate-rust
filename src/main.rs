@@ -8,6 +8,7 @@
 extern crate core;
 
 mod baseliner;
+mod controller;
 mod log;
 mod measurement;
 mod metrics;
@@ -22,6 +23,7 @@ mod time;
 mod util;
 
 use crate::baseliner::Baseliner;
+use crate::controller::Controller;
 use crate::measurement::icmp::{IcmpBinding, IcmpEngine};
 use crate::measurement::model::{
     MeasurementSource, MeasurementStream, MeasurementStreamId, ProbeSchedule,
@@ -35,6 +37,7 @@ use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
 use crate::settings::MeasurementType;
 use crate::settings::Settings;
+use crate::util::RwLockExt;
 use ::log::{info, warn};
 use flume::RecvTimeoutError;
 use std::collections::HashMap;
@@ -42,7 +45,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread::sleep;
+use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
 use std::{process, thread};
 
@@ -223,6 +226,26 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
     })
 }
 
+fn spawn_worker<F>(
+    name: &str,
+    error_tx: &flume::Sender<anyhow::Error>,
+    worker: F,
+) -> anyhow::Result<JoinHandle<()>>
+where
+    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
+{
+    let error_tx = error_tx.clone();
+
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            if let Err(error) = worker() {
+                let _ = error_tx.send(error);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
 fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()> {
     loop {
         match error_rx.recv_timeout(Duration::from_secs(1)) {
@@ -243,7 +266,7 @@ fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()
 }
 
 fn run(settings: &Settings) -> anyhow::Result<()> {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new()?;
 
     if settings.advanced_settings.dry_run {
         info!("*** MONITORING MODE ACTIVE — qdisc rates will NOT be changed ***");
@@ -251,26 +274,6 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
 
     let start_time = Instant::now();
     let probe_id = probe_identifier();
-
-    let (ie_txt, _) = flume::unbounded();
-    let (binding_tx, binding_rx) = flume::unbounded();
-    let engine = {
-        let _guard = rt.enter();
-        IcmpEngine::new(start_time, &settings.network, ie_txt, binding_rx)?
-    };
-    binding_tx.send(vec![IcmpBinding::new(
-        MeasurementStream {
-            id: MeasurementStreamId(0),
-            peer: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            source: MeasurementSource::IcmpEcho,
-        },
-        ProbeSchedule {
-            period: Duration::from_secs(1),
-            offset: Duration::from_secs(0),
-        },
-    )])?;
-
-    rt.spawn(engine.run());
 
     let ReflectorSetup {
         peers: reflector_peers,
@@ -281,14 +284,32 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
 
     let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
     let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
+    let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
+    let (icmp_binding_tx, icmp_binding_rx) = flume::unbounded();
+    let (measurement_tx, measurement_rx) = flume::unbounded();
+    let (reflector_tx, reflector_rx) = flume::unbounded();
+    let (reselect_tx, reselect_rx) = flume::bounded(1);
     let (selection_snapshot_tx, selection_snapshot_rx) = if reselection_enabled {
         let (tx, rx) = flume::unbounded();
         (Some(tx), Some(rx))
     } else {
         (None, None)
     };
-    let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
-    let (reselect_tx, reselect_rx) = flume::bounded(1);
+
+    let engine = {
+        let _guard = rt.enter();
+        IcmpEngine::new(
+            start_time,
+            &settings.network,
+            measurement_tx,
+            icmp_binding_rx,
+        )?
+    };
+
+    rt.spawn(engine.run());
+
+    let controller = Controller::new(reflector_rx, icmp_binding_tx);
+    rt.spawn(controller.run(reflector_peers.read_anyhow()?.clone()));
 
     let dropped = Arc::new(AtomicU32::new(0));
 
@@ -299,14 +320,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             metrics_rx: rx,
             metrics_dropped: Arc::clone(&dropped),
         };
-        let err_tx = error_tx.clone();
-        let handle = thread::Builder::new()
-            .name("metrics".to_string())
-            .spawn(move || {
-                if let Err(error) = metrics.run() {
-                    let _ = err_tx.send(error);
-                }
-            })?;
+        let handle = spawn_worker("metrics", &error_tx, move || metrics.run())?;
         (Some(tx), Some(handle))
     } else {
         (None, None)
@@ -366,52 +380,35 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let mut main_traffic_control = traffic_control_backend();
     let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
 
-    let err_tx = error_tx.clone();
     let listener_peers = Arc::clone(&reflector_peers);
     let listener_inflight = Arc::clone(&inflight);
     let measurement_type = settings.advanced_settings.measurement_type;
-    thread::Builder::new()
-        .name("receiver".to_string())
-        .spawn(move || {
-            if let Err(error) = ping_listener.listen(
-                probe_id,
-                measurement_type,
-                listener_peers,
-                listener_inflight,
-                baseliner_stats_tx,
-                ping_metrics,
-            ) {
-                let _ = err_tx.send(error);
-            }
-        })?;
+    spawn_worker("receiver", &error_tx, move || {
+        ping_listener.listen(
+            probe_id,
+            measurement_type,
+            listener_peers,
+            listener_inflight,
+            baseliner_stats_tx,
+            ping_metrics,
+        )
+    })?;
 
-    let err_tx = error_tx.clone();
-    thread::Builder::new()
-        .name("baseliner".to_string())
-        .spawn(move || {
-            if let Err(error) = baseliner.run() {
-                let _ = err_tx.send(error);
-            }
-        })?;
+    spawn_worker("baseliner", &error_tx, move || baseliner.run())?;
 
-    let err_tx = error_tx.clone();
     let sender_peers = Arc::clone(&reflector_peers);
     let sender_inflight = Arc::clone(&inflight);
     let measurement_type = settings.advanced_settings.measurement_type;
     let tick_interval = settings.advanced_settings.tick_interval;
-    thread::Builder::new()
-        .name("sender".to_string())
-        .spawn(move || {
-            if let Err(error) = ping_sender.send(
-                probe_id,
-                measurement_type,
-                sender_peers,
-                sender_inflight,
-                tick_interval,
-            ) {
-                let _ = err_tx.send(error);
-            }
-        })?;
+    spawn_worker("sender", &error_tx, move || {
+        ping_sender.send(
+            probe_id,
+            measurement_type,
+            sender_peers,
+            sender_inflight,
+            tick_interval,
+        )
+    })?;
 
     let main_event_metrics = event_metrics.clone();
 
@@ -424,15 +421,9 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             reflector_pool,
             trigger_channel: reselect_rx,
             metrics: event_metrics,
+            reflector_tx,
         };
-        let err_tx = error_tx.clone();
-        thread::Builder::new()
-            .name("reselection".to_string())
-            .spawn(move || {
-                if let Err(error) = reflector_selector.run() {
-                    let _ = err_tx.send(error);
-                }
-            })?;
+        spawn_worker("reselection", &error_tx, move || reflector_selector.run())?;
     }
 
     // Give the baseliner time to collect initial samples before adjusting rates.
@@ -446,14 +437,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         rate_metrics,
     )?;
 
-    let err_tx = error_tx.clone();
-    thread::Builder::new()
-        .name("ratecontroller".to_string())
-        .spawn(move || {
-            if let Err(error) = ratecontroller.run() {
-                let _ = err_tx.send(error);
-            }
-        })?;
+    spawn_worker("ratecontroller", &error_tx, move || ratecontroller.run())?;
 
     // Drop the original sender so the channel disconnects if all workers exit cleanly.
     drop(error_tx);

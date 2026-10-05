@@ -10,7 +10,7 @@ use crate::baseliner::ControlSnapshot;
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
 use crate::util::RwLockExt;
-use flume::{Receiver, RecvError, RecvTimeoutError, Selector};
+use flume::{Receiver, RecvError, RecvTimeoutError, Selector, Sender};
 use log::{debug, info};
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
@@ -108,6 +108,7 @@ pub struct ReflectorSelector {
     pub settings: Settings,
     pub snapshot_rx: Receiver<ControlSnapshot>,
     pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
+    pub reflector_tx: Sender<Vec<IpAddr>>,
     pub reflector_pool: Vec<IpAddr>,
     pub trigger_channel: Receiver<bool>,
     pub metrics: MetricsSender,
@@ -186,6 +187,7 @@ impl ReflectorSelector {
             // Clone next_peers because we need it again after the baseline sleep
             // to iterate over candidates for RTT measurement.
             *reflectors_peers = next_peers.clone();
+            self.reflector_tx.send(next_peers.clone())?;
 
             // Drop the MutexGuard explicitly, as Rust won't unlock the mutex by default
             // until the guard goes out of scope
@@ -251,6 +253,7 @@ impl ReflectorSelector {
                 });
             }
 
+            self.reflector_tx.send(new_peers.clone())?;
             *reflectors_peers = new_peers;
         }
     }
