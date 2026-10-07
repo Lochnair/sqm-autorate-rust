@@ -11,6 +11,7 @@ use icmp_socket2::{
     packet::{IcmpPacketBuildError, WithEchoRequest, WithTimestampRequest},
     tokio::AsyncIcmpV4Socket,
 };
+use log::debug;
 use thiserror::Error;
 
 use crate::{
@@ -28,6 +29,7 @@ pub struct IcmpBinding {
     pub schedule: ProbeSchedule,
 
     next_probe_at: Instant,
+    next_sequence: u16,
 }
 
 impl IcmpBinding {
@@ -36,6 +38,7 @@ impl IcmpBinding {
             stream,
             schedule,
             next_probe_at: Instant::now(),
+            next_sequence: 0,
         }
     }
 }
@@ -94,7 +97,6 @@ pub struct IcmpEngine {
     socket: AsyncIcmpV4Socket,
 
     identifier: u16,
-    next_sequence: u16,
 
     bindings: HashMap<MeasurementStreamId, IcmpBinding>,
     inflight: HashMap<InFlightProbeKey, InFlightProbe>,
@@ -149,7 +151,6 @@ impl IcmpEngine {
         Ok(Self {
             socket: socket.into_tokio()?,
             identifier,
-            next_sequence: 0,
             bindings: HashMap::new(),
             inflight,
             origin,
@@ -185,6 +186,8 @@ impl IcmpEngine {
 
         // Remove bindings that are no longer desired.
         self.bindings.retain(|id, _| desired_ids.contains(id));
+        self.inflight
+            .retain(|_, probe| desired_ids.contains(&probe.stream.id));
 
         for desired in desired {
             match self.bindings.get_mut(&desired.stream.id) {
@@ -236,18 +239,21 @@ impl IcmpEngine {
     }
 
     async fn send_probe(&mut self, stream_id: MeasurementStreamId) -> Result<(), IcmpError> {
-        let stream = self
-            .bindings
-            .get(&stream_id)
-            .expect("binding disappeared")
-            .stream;
+        let (stream, sequence) = {
+            let binding = self
+                .bindings
+                .get_mut(&stream_id)
+                .expect("binding disappeared");
+
+            let sequence = binding.next_sequence;
+            binding.next_sequence = binding.next_sequence.wrapping_add(1);
+
+            (binding.stream, sequence)
+        };
 
         let IpAddr::V4(peer) = stream.peer else {
             return Err(IcmpError::UnsupportedPeer(stream.peer));
         };
-
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
 
         let packet = match stream.source {
             MeasurementSource::IcmpEcho => {
@@ -302,6 +308,20 @@ impl IcmpEngine {
                     .remove(&key)
                     .ok_or(IcmpError::NoMatchingProbe(key))?;
 
+                debug!(
+                    "ICMP engine > Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  | Originate: {:>8}  | Received time: {:>8}  | Transmit time: {:>8}  | RTT: {:8.3} ms  | UL time: {:>8}  | DL time: {:>8}",
+                    "ICMP",
+                    peer,
+                    sequence,
+                    ClockSample::<Realtime>::now().as_time_since_midnight(),
+                    "N/A",
+                    "N/A",
+                    "N/A",
+                    observed_at.duration_since(probe.sent_at).as_secs_f64() * 1_000.0,
+                    "N/A",
+                    "N/A",
+                );
+
                 Ok(MeasurementObservation {
                     stream: probe.stream,
                     started_at: probe.sent_at,
@@ -346,6 +366,20 @@ impl IcmpEngine {
 
                 let uplink_ms = timestamp_delta(receive as i64, originate as i64);
                 let downlink_ms = timestamp_delta(now_ms, transmit as i64);
+
+                debug!(
+                    "ICMP engine > Type: {:4}  | Reflector IP: {:>15}  | Seq: {:5}  | Current time: {:8}  | Originate: {:8}  | Received time: {:8}  | Transmit time: {:8}  | RTT: {:8.3} ms  | UL time: {:5} ms  | DL time: {:5} ms",
+                    "ICMP",
+                    peer,
+                    sequence,
+                    now_ms,
+                    originate,
+                    receive,
+                    transmit,
+                    observed_at.duration_since(probe.sent_at).as_secs_f64() * 1_000.0,
+                    uplink_ms,
+                    downlink_ms,
+                );
 
                 Ok(MeasurementObservation {
                     stream: probe.stream,

@@ -6,8 +6,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::SHUTDOWN;
+use crate::measurement::model::{MeasurementEvent, MeasurementObservation};
 use crate::metrics::{Metric, MetricsSender};
-use crate::pinger::PingReply;
 use crate::settings::Settings;
 use flume::{Receiver, Sender};
 use log::{debug, info};
@@ -29,10 +29,16 @@ pub struct EwmaStats {
 }
 
 impl EwmaStats {
-    fn from_reply(reply: &PingReply) -> Self {
+    fn from_reply(reply: &MeasurementObservation) -> Self {
         Self {
-            down: reply.down_time,
-            up: reply.up_time,
+            down: reply
+                .one_way
+                .map(|o| o.downlink.as_nanos() as f64 / 1000000.0)
+                .unwrap_or(reply.rtt_ms() / 2.0),
+            up: reply
+                .one_way
+                .map(|o| o.uplink.as_nanos() as f64 / 1000000.0)
+                .unwrap_or(reply.rtt_ms() / 2.0),
         }
     }
 
@@ -73,7 +79,7 @@ pub struct Baseliner {
     pub settings: Settings,
     pub reselect_trigger: Sender<bool>,
     pub start_time: Instant,
-    pub stats_rx: Receiver<PingReply>,
+    pub stats_rx: Receiver<MeasurementEvent>,
     pub control_tx: Sender<ControlSnapshot>,
     pub selection_tx: Option<Sender<ControlSnapshot>>,
     pub baseline_metrics: MetricsSender,
@@ -115,19 +121,19 @@ fn update_reflector_state(
 
 fn process_reply(
     reflectors: &mut HashMap<IpAddr, ReflectorState>,
-    reply: &PingReply,
+    reply: &MeasurementObservation,
     start_time: Instant,
     slow_factor: f64,
     fast_factor: f64,
 ) -> (ReflectorState, bool) {
     let sample = EwmaStats::from_reply(reply);
     let state = reflectors
-        .entry(reply.reflector)
-        .or_insert_with(|| ReflectorState::new(sample, reply.last_receive_time_s));
+        .entry(reply.stream.peer)
+        .or_insert_with(|| ReflectorState::new(sample, reply.observed_at));
     let anomaly = update_reflector_state(
         state,
         sample,
-        reply.last_receive_time_s,
+        reply.observed_at,
         start_time,
         slow_factor,
         fast_factor,
@@ -165,8 +171,14 @@ impl Baseliner {
                 return Ok(());
             }
 
-            let reply = self.stats_rx.recv()?;
-            let reflector = reply.reflector;
+            let event = self.stats_rx.recv()?;
+
+            let reply = match event {
+                MeasurementEvent::Observation(reply) => reply,
+                MeasurementEvent::Loss(_) => continue,
+            };
+
+            let reflector = reply.stream.peer;
             let (state, anomaly) = process_reply(
                 &mut reflectors,
                 &reply,
@@ -218,7 +230,10 @@ impl Baseliner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::MeasurementType;
+    use crate::measurement::model::{
+        MeasurementSource, MeasurementStream, MeasurementStreamId, OneWayClock, OneWayLatency,
+        SignedDuration,
+    };
     use std::time::Duration;
 
     fn state(
@@ -245,19 +260,25 @@ mod tests {
         EwmaStats { down, up }
     }
 
-    fn reply(reflector: IpAddr, down_time: f64, up_time: f64, received_at: Instant) -> PingReply {
-        PingReply {
-            reflector,
-            measurement_type: MeasurementType::Icmp,
-            seq: 0,
-            rtt: down_time + up_time,
-            current_time: 0,
-            down_time,
-            up_time,
-            originate_timestamp: 0,
-            receive_timestamp: 0,
-            transmit_timestamp: 0,
-            last_receive_time_s: received_at,
+    fn reply(
+        reflector: IpAddr,
+        down_time: f64,
+        up_time: f64,
+        received_at: Instant,
+    ) -> MeasurementObservation {
+        MeasurementObservation {
+            stream: MeasurementStream {
+                id: MeasurementStreamId(0),
+                peer: reflector,
+                source: MeasurementSource::IcmpEcho,
+            },
+            started_at: received_at,
+            observed_at: received_at,
+            one_way: Some(OneWayLatency {
+                uplink: SignedDuration::from_millis(up_time as i64),
+                downlink: SignedDuration::from_millis(down_time as i64),
+                clock: OneWayClock::Uncalibrated,
+            }),
         }
     }
 

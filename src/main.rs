@@ -12,9 +12,6 @@ mod controller;
 mod log;
 mod measurement;
 mod metrics;
-mod pinger;
-mod pinger_icmp;
-mod pinger_icmp_ts;
 mod platform;
 mod ratecontroller;
 mod reflector_selector;
@@ -24,41 +21,28 @@ mod util;
 
 use crate::baseliner::Baseliner;
 use crate::controller::Controller;
-use crate::measurement::icmp::{IcmpBinding, IcmpEngine};
-use crate::measurement::model::{
-    MeasurementSource, MeasurementStream, MeasurementStreamId, ProbeSchedule,
-};
+use crate::measurement::icmp::IcmpEngine;
 use crate::metrics::{Metric, Metrics, MetricsSender};
-use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
-use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
-use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
 use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
-use crate::settings::MeasurementType;
 use crate::settings::Settings;
 use crate::util::RwLockExt;
 use ::log::{info, warn};
 use flume::RecvTimeoutError;
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
+use std::thread;
 use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
-use std::{process, thread};
 
 struct ReflectorSetup {
     peers: Arc<RwLock<Vec<IpAddr>>>,
     pool: Vec<IpAddr>,
     reselection_enabled: bool,
-    active_count: usize,
 }
-
-type PingListenerBox = Box<dyn PingListener + Send>;
-type PingSenderBox = Box<dyn PingSender + Send>;
-
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn signal_handler(_: libc::c_int) {
@@ -66,47 +50,6 @@ extern "C" fn signal_handler(_: libc::c_int) {
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const RESELECTION_CANDIDATE_BURST: usize = 20;
-const INFLIGHT_CAPACITY_DUPLICATE_FACTOR: usize = 2;
-const INFLIGHT_CAPACITY_MIN: usize = 256;
-
-fn compute_inflight_probe_capacity(
-    settings: &Settings,
-    active_reflector_count: usize,
-    reselection_enabled: bool,
-) -> usize {
-    let tick_interval_ms = (settings.advanced_settings.tick_interval * 1000.0).max(1.0);
-    let expected_path_delay_ms = (settings.advanced_settings.download_delay_ms
-        + settings.advanced_settings.upload_delay_ms)
-        .max(10.0);
-    // Keep enough room for severe queueing events while still adapting to configured delay budgets.
-    let max_rtt_ms = (expected_path_delay_ms * 20.0).clamp(1000.0, 10000.0);
-
-    let burst_reflector_count = if reselection_enabled {
-        active_reflector_count + RESELECTION_CANDIDATE_BURST
-    } else {
-        active_reflector_count
-    };
-    let probes_per_reflector = (max_rtt_ms / tick_interval_ms).ceil() as usize;
-
-    (burst_reflector_count
-        .saturating_mul(probes_per_reflector)
-        .saturating_mul(INFLIGHT_CAPACITY_DUPLICATE_FACTOR))
-    .max(INFLIGHT_CAPACITY_MIN)
-}
-
-fn create_pinger(measurement_type: MeasurementType) -> (PingListenerBox, PingSenderBox) {
-    match measurement_type {
-        MeasurementType::Icmp => (
-            Box::new(PingerICMPEchoListener {}),
-            Box::new(PingerICMPEchoSender {}),
-        ),
-        MeasurementType::IcmpTimestamps => (
-            Box::new(PingerICMPTimestampListener {}),
-            Box::new(PingerICMPTimestampSender {}),
-        ),
-    }
-}
 
 fn initialize_shaper<T: TrafficControlBackend>(
     settings: &Settings,
@@ -163,11 +106,6 @@ fn install_signal_handlers() {
     }
 }
 
-fn probe_identifier() -> u16 {
-    // The ICMP identifier is only two bytes.
-    (process::id() & 0xffff) as u16
-}
-
 fn restore_shaper<T: TrafficControlBackend>(
     settings: &Settings,
     traffic_control: &mut T,
@@ -220,9 +158,6 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
         peers: Arc::new(RwLock::new(default_reflectors.to_vec())),
         pool,
         reselection_enabled,
-        active_count: default_reflectors
-            .len()
-            .max(settings.advanced_settings.num_reflectors as usize),
     })
 }
 
@@ -273,16 +208,13 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     }
 
     let start_time = Instant::now();
-    let probe_id = probe_identifier();
 
     let ReflectorSetup {
         peers: reflector_peers,
         pool: reflector_pool,
         reselection_enabled,
-        active_count: active_reflector_count,
     } = setup_reflectors(settings)?;
 
-    let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
     let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
     let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
     let (icmp_binding_tx, icmp_binding_rx) = flume::unbounded();
@@ -334,7 +266,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             .unwrap_or_else(MetricsSender::disabled)
     };
 
-    let ping_metrics = make_sender(settings.observability.export_ping_metrics);
+    let _ping_metrics = make_sender(settings.observability.export_ping_metrics);
     let baseline_metrics = make_sender(settings.observability.export_baseline_metrics);
     let event_metrics = make_sender(settings.observability.export_events);
     let rate_metrics = make_sender(settings.observability.export_rate_metrics);
@@ -350,27 +282,11 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         },
     });
 
-    let (mut ping_listener, mut ping_sender) =
-        create_pinger(settings.advanced_settings.measurement_type);
-
-    let inflight_probe_capacity =
-        compute_inflight_probe_capacity(settings, active_reflector_count, reselection_enabled);
-    info!(
-        "In-flight probe cache capacity: {} (active_reflectors={}, reselection_enabled={}, tick_interval_s={})",
-        inflight_probe_capacity,
-        active_reflector_count,
-        reselection_enabled,
-        settings.advanced_settings.tick_interval
-    );
-
-    let inflight: InFlightProbeCache =
-        Arc::new(Mutex::new(HashMap::with_capacity(inflight_probe_capacity)));
-
     let baseliner = Baseliner {
         settings: settings.clone(),
         reselect_trigger: reselect_tx.clone(),
         start_time,
-        stats_rx: baseliner_stats_rx,
+        stats_rx: measurement_rx,
         control_tx: control_snapshot_tx,
         selection_tx: selection_snapshot_tx,
         baseline_metrics,
@@ -380,35 +296,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let mut main_traffic_control = traffic_control_backend();
     let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
 
-    let listener_peers = Arc::clone(&reflector_peers);
-    let listener_inflight = Arc::clone(&inflight);
-    let measurement_type = settings.advanced_settings.measurement_type;
-    spawn_worker("receiver", &error_tx, move || {
-        ping_listener.listen(
-            probe_id,
-            measurement_type,
-            listener_peers,
-            listener_inflight,
-            baseliner_stats_tx,
-            ping_metrics,
-        )
-    })?;
-
     spawn_worker("baseliner", &error_tx, move || baseliner.run())?;
-
-    let sender_peers = Arc::clone(&reflector_peers);
-    let sender_inflight = Arc::clone(&inflight);
-    let measurement_type = settings.advanced_settings.measurement_type;
-    let tick_interval = settings.advanced_settings.tick_interval;
-    spawn_worker("sender", &error_tx, move || {
-        ping_sender.send(
-            probe_id,
-            measurement_type,
-            sender_peers,
-            sender_inflight,
-            tick_interval,
-        )
-    })?;
 
     let main_event_metrics = event_metrics.clone();
 

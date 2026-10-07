@@ -98,7 +98,6 @@ pub struct OneWayLatency {
     pub clock: OneWayClock,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct MeasurementObservation {
     pub stream: MeasurementStream,
@@ -113,7 +112,6 @@ pub struct MeasurementObservation {
     pub one_way: Option<OneWayLatency>,
 }
 
-#[allow(dead_code)]
 impl MeasurementObservation {
     pub fn rtt(&self) -> Duration {
         self.observed_at.duration_since(self.started_at)
