@@ -258,11 +258,6 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     };
 
     spawn_task(&rt, &error_tx, engine.run());
-    spawn_task(
-        &rt,
-        &error_tx,
-        controller.run(reflector_peers.read_anyhow()?.clone()),
-    );
 
     let dropped = Arc::new(AtomicU32::new(0));
 
@@ -319,6 +314,11 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
 
     spawn_worker("baseliner", &error_tx, move || baseliner.run())?;
+    spawn_task(
+        &rt,
+        &error_tx,
+        controller.run(reflector_peers.read_anyhow()?.clone()),
+    );
 
     let main_event_metrics = event_metrics.clone();
 
