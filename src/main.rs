@@ -161,6 +161,24 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
     })
 }
 
+fn spawn_task<F, E>(
+    rt: &tokio::runtime::Runtime,
+    error_tx: &flume::Sender<anyhow::Error>,
+    task: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Future<Output = Result<(), E>> + Send + 'static,
+    E: Into<anyhow::Error> + Send + 'static,
+{
+    let error_tx = error_tx.clone();
+
+    rt.spawn(async move {
+        if let Err(error) = task.await {
+            let _ = error_tx.send(error.into());
+        }
+    })
+}
+
 fn spawn_worker<F>(
     name: &str,
     error_tx: &flume::Sender<anyhow::Error>,
@@ -185,7 +203,7 @@ fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()
     loop {
         match error_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(error) => {
-                return Err(anyhow::anyhow!("thread exited with error: {error}"));
+                return Err(anyhow::anyhow!("worker exited with error: {error}"));
             }
             Err(RecvTimeoutError::Disconnected) => {
                 return Ok(());
@@ -228,6 +246,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         (None, None)
     };
 
+    let controller = Controller::new(reflector_rx, icmp_binding_tx);
     let engine = {
         let _guard = rt.enter();
         IcmpEngine::new(
@@ -238,10 +257,12 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         )?
     };
 
-    rt.spawn(engine.run());
-
-    let controller = Controller::new(reflector_rx, icmp_binding_tx);
-    rt.spawn(controller.run(reflector_peers.read_anyhow()?.clone()));
+    spawn_task(&rt, &error_tx, engine.run());
+    spawn_task(
+        &rt,
+        &error_tx,
+        controller.run(reflector_peers.read_anyhow()?.clone()),
+    );
 
     let dropped = Arc::new(AtomicU32::new(0));
 
