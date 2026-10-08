@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::measurement::model::MeasurementSource;
+use crate::settings::ObservabilityProtocol;
 use crate::settings::Settings;
-use crate::settings::{MeasurementType, ObservabilityProtocol};
 use crate::time::{ClockSample, Realtime};
 use flume::{Receiver, RecvTimeoutError, Sender};
 use log::{error, info, warn};
@@ -93,7 +94,7 @@ impl Transport {
 pub enum Metric {
     Ping {
         reflector: IpAddr,
-        measurement_type: MeasurementType,
+        measurement_type: MeasurementSource,
         rtt: f64,
         up_time: f64,
         down_time: f64,

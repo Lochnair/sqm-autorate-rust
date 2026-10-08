@@ -8,11 +8,10 @@
 extern crate core;
 
 mod baseliner;
+mod controller;
 mod log;
+mod measurement;
 mod metrics;
-mod pinger;
-mod pinger_icmp;
-mod pinger_icmp_ts;
 mod platform;
 mod ratecontroller;
 mod reflector_selector;
@@ -21,36 +20,29 @@ mod time;
 mod util;
 
 use crate::baseliner::Baseliner;
+use crate::controller::Controller;
+use crate::measurement::icmp::IcmpEngine;
 use crate::metrics::{Metric, Metrics, MetricsSender};
-use crate::pinger::{InFlightProbeCache, PingListener, PingSender};
-use crate::pinger_icmp::{PingerICMPEchoListener, PingerICMPEchoSender};
-use crate::pinger_icmp_ts::{PingerICMPTimestampListener, PingerICMPTimestampSender};
 use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
 use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
-use crate::settings::MeasurementType;
 use crate::settings::Settings;
+use crate::util::RwLockExt;
 use ::log::{info, warn};
 use flume::RecvTimeoutError;
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread::sleep;
+use std::sync::{Arc, RwLock};
+use std::thread;
+use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
-use std::{process, thread};
 
 struct ReflectorSetup {
     peers: Arc<RwLock<Vec<IpAddr>>>,
     pool: Vec<IpAddr>,
     reselection_enabled: bool,
-    active_count: usize,
 }
-
-type PingListenerBox = Box<dyn PingListener + Send>;
-type PingSenderBox = Box<dyn PingSender + Send>;
-
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn signal_handler(_: libc::c_int) {
@@ -58,47 +50,6 @@ extern "C" fn signal_handler(_: libc::c_int) {
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const RESELECTION_CANDIDATE_BURST: usize = 20;
-const INFLIGHT_CAPACITY_DUPLICATE_FACTOR: usize = 2;
-const INFLIGHT_CAPACITY_MIN: usize = 256;
-
-fn compute_inflight_probe_capacity(
-    settings: &Settings,
-    active_reflector_count: usize,
-    reselection_enabled: bool,
-) -> usize {
-    let tick_interval_ms = (settings.advanced_settings.tick_interval * 1000.0).max(1.0);
-    let expected_path_delay_ms = (settings.advanced_settings.download_delay_ms
-        + settings.advanced_settings.upload_delay_ms)
-        .max(10.0);
-    // Keep enough room for severe queueing events while still adapting to configured delay budgets.
-    let max_rtt_ms = (expected_path_delay_ms * 20.0).clamp(1000.0, 10000.0);
-
-    let burst_reflector_count = if reselection_enabled {
-        active_reflector_count + RESELECTION_CANDIDATE_BURST
-    } else {
-        active_reflector_count
-    };
-    let probes_per_reflector = (max_rtt_ms / tick_interval_ms).ceil() as usize;
-
-    (burst_reflector_count
-        .saturating_mul(probes_per_reflector)
-        .saturating_mul(INFLIGHT_CAPACITY_DUPLICATE_FACTOR))
-    .max(INFLIGHT_CAPACITY_MIN)
-}
-
-fn create_pinger(measurement_type: MeasurementType) -> (PingListenerBox, PingSenderBox) {
-    match measurement_type {
-        MeasurementType::Icmp => (
-            Box::new(PingerICMPEchoListener {}),
-            Box::new(PingerICMPEchoSender {}),
-        ),
-        MeasurementType::IcmpTimestamps => (
-            Box::new(PingerICMPTimestampListener {}),
-            Box::new(PingerICMPTimestampSender {}),
-        ),
-    }
-}
 
 fn initialize_shaper<T: TrafficControlBackend>(
     settings: &Settings,
@@ -155,11 +106,6 @@ fn install_signal_handlers() {
     }
 }
 
-fn probe_identifier() -> u16 {
-    // The ICMP identifier is only two bytes.
-    (process::id() & 0xffff) as u16
-}
-
 fn restore_shaper<T: TrafficControlBackend>(
     settings: &Settings,
     traffic_control: &mut T,
@@ -212,17 +158,52 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
         peers: Arc::new(RwLock::new(default_reflectors.to_vec())),
         pool,
         reselection_enabled,
-        active_count: default_reflectors
-            .len()
-            .max(settings.advanced_settings.num_reflectors as usize),
     })
+}
+
+fn spawn_task<F, E>(
+    rt: &tokio::runtime::Runtime,
+    error_tx: &flume::Sender<anyhow::Error>,
+    task: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Future<Output = Result<(), E>> + Send + 'static,
+    E: Into<anyhow::Error> + Send + 'static,
+{
+    let error_tx = error_tx.clone();
+
+    rt.spawn(async move {
+        if let Err(error) = task.await {
+            let _ = error_tx.send(error.into());
+        }
+    })
+}
+
+fn spawn_worker<F>(
+    name: &str,
+    error_tx: &flume::Sender<anyhow::Error>,
+    worker: F,
+) -> anyhow::Result<JoinHandle<()>>
+where
+    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
+{
+    let error_tx = error_tx.clone();
+
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            if let Err(error) = worker() {
+                let _ = error_tx.send(error);
+            }
+        })
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()> {
     loop {
         match error_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(error) => {
-                return Err(anyhow::anyhow!("thread exited with error: {error}"));
+                return Err(anyhow::anyhow!("worker exited with error: {error}"));
             }
             Err(RecvTimeoutError::Disconnected) => {
                 return Ok(());
@@ -238,30 +219,45 @@ fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()
 }
 
 fn run(settings: &Settings) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+
     if settings.advanced_settings.dry_run {
         info!("*** MONITORING MODE ACTIVE — qdisc rates will NOT be changed ***");
     }
 
     let start_time = Instant::now();
-    let probe_id = probe_identifier();
 
     let ReflectorSetup {
         peers: reflector_peers,
         pool: reflector_pool,
         reselection_enabled,
-        active_count: active_reflector_count,
     } = setup_reflectors(settings)?;
 
-    let (baseliner_stats_tx, baseliner_stats_rx) = flume::unbounded();
     let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
+    let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
+    let (icmp_binding_tx, icmp_binding_rx) = flume::unbounded();
+    let (measurement_tx, measurement_rx) = flume::unbounded();
+    let (reflector_tx, reflector_rx) = flume::unbounded();
+    let (reselect_tx, reselect_rx) = flume::bounded(1);
     let (selection_snapshot_tx, selection_snapshot_rx) = if reselection_enabled {
         let (tx, rx) = flume::unbounded();
         (Some(tx), Some(rx))
     } else {
         (None, None)
     };
-    let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
-    let (reselect_tx, reselect_rx) = flume::bounded(1);
+
+    let controller = Controller::new(reflector_rx, icmp_binding_tx);
+    let engine = {
+        let _guard = rt.enter();
+        IcmpEngine::new(
+            start_time,
+            &settings.network,
+            measurement_tx,
+            icmp_binding_rx,
+        )?
+    };
+
+    spawn_task(&rt, &error_tx, engine.run());
 
     let dropped = Arc::new(AtomicU32::new(0));
 
@@ -272,14 +268,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             metrics_rx: rx,
             metrics_dropped: Arc::clone(&dropped),
         };
-        let err_tx = error_tx.clone();
-        let handle = thread::Builder::new()
-            .name("metrics".to_string())
-            .spawn(move || {
-                if let Err(error) = metrics.run() {
-                    let _ = err_tx.send(error);
-                }
-            })?;
+        let handle = spawn_worker("metrics", &error_tx, move || metrics.run())?;
         (Some(tx), Some(handle))
     } else {
         (None, None)
@@ -309,82 +298,27 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         },
     });
 
-    let (mut ping_listener, mut ping_sender) =
-        create_pinger(settings.advanced_settings.measurement_type);
-
-    let inflight_probe_capacity =
-        compute_inflight_probe_capacity(settings, active_reflector_count, reselection_enabled);
-    info!(
-        "In-flight probe cache capacity: {} (active_reflectors={}, reselection_enabled={}, tick_interval_s={})",
-        inflight_probe_capacity,
-        active_reflector_count,
-        reselection_enabled,
-        settings.advanced_settings.tick_interval
-    );
-
-    let inflight: InFlightProbeCache =
-        Arc::new(Mutex::new(HashMap::with_capacity(inflight_probe_capacity)));
-
     let baseliner = Baseliner {
         settings: settings.clone(),
         reselect_trigger: reselect_tx.clone(),
         start_time,
-        stats_rx: baseliner_stats_rx,
+        stats_rx: measurement_rx,
         control_tx: control_snapshot_tx,
         selection_tx: selection_snapshot_tx,
         baseline_metrics,
         event_metrics: event_metrics.clone(),
+        ping_metrics,
     };
 
     let mut main_traffic_control = traffic_control_backend();
     let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
 
-    let err_tx = error_tx.clone();
-    let listener_peers = Arc::clone(&reflector_peers);
-    let listener_inflight = Arc::clone(&inflight);
-    let measurement_type = settings.advanced_settings.measurement_type;
-    thread::Builder::new()
-        .name("receiver".to_string())
-        .spawn(move || {
-            if let Err(error) = ping_listener.listen(
-                probe_id,
-                measurement_type,
-                listener_peers,
-                listener_inflight,
-                baseliner_stats_tx,
-                ping_metrics,
-            ) {
-                let _ = err_tx.send(error);
-            }
-        })?;
-
-    let err_tx = error_tx.clone();
-    thread::Builder::new()
-        .name("baseliner".to_string())
-        .spawn(move || {
-            if let Err(error) = baseliner.run() {
-                let _ = err_tx.send(error);
-            }
-        })?;
-
-    let err_tx = error_tx.clone();
-    let sender_peers = Arc::clone(&reflector_peers);
-    let sender_inflight = Arc::clone(&inflight);
-    let measurement_type = settings.advanced_settings.measurement_type;
-    let tick_interval = settings.advanced_settings.tick_interval;
-    thread::Builder::new()
-        .name("sender".to_string())
-        .spawn(move || {
-            if let Err(error) = ping_sender.send(
-                probe_id,
-                measurement_type,
-                sender_peers,
-                sender_inflight,
-                tick_interval,
-            ) {
-                let _ = err_tx.send(error);
-            }
-        })?;
+    spawn_worker("baseliner", &error_tx, move || baseliner.run())?;
+    spawn_task(
+        &rt,
+        &error_tx,
+        controller.run(reflector_peers.read_anyhow()?.clone()),
+    );
 
     let main_event_metrics = event_metrics.clone();
 
@@ -397,15 +331,9 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             reflector_pool,
             trigger_channel: reselect_rx,
             metrics: event_metrics,
+            reflector_tx,
         };
-        let err_tx = error_tx.clone();
-        thread::Builder::new()
-            .name("reselection".to_string())
-            .spawn(move || {
-                if let Err(error) = reflector_selector.run() {
-                    let _ = err_tx.send(error);
-                }
-            })?;
+        spawn_worker("reselection", &error_tx, move || reflector_selector.run())?;
     }
 
     // Give the baseliner time to collect initial samples before adjusting rates.
@@ -419,14 +347,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         rate_metrics,
     )?;
 
-    let err_tx = error_tx.clone();
-    thread::Builder::new()
-        .name("ratecontroller".to_string())
-        .spawn(move || {
-            if let Err(error) = ratecontroller.run() {
-                let _ = err_tx.send(error);
-            }
-        })?;
+    spawn_worker("ratecontroller", &error_tx, move || ratecontroller.run())?;
 
     // Drop the original sender so the channel disconnects if all workers exit cleanly.
     drop(error_tx);
