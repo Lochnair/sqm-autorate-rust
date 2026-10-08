@@ -266,7 +266,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             .unwrap_or_else(MetricsSender::disabled)
     };
 
-    let _ping_metrics = make_sender(settings.observability.export_ping_metrics);
+    let ping_metrics = make_sender(settings.observability.export_ping_metrics);
     let baseline_metrics = make_sender(settings.observability.export_baseline_metrics);
     let event_metrics = make_sender(settings.observability.export_events);
     let rate_metrics = make_sender(settings.observability.export_rate_metrics);
@@ -291,6 +291,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         selection_tx: selection_snapshot_tx,
         baseline_metrics,
         event_metrics: event_metrics.clone(),
+        ping_metrics,
     };
 
     let mut main_traffic_control = traffic_control_backend();

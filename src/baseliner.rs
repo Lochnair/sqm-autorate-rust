@@ -84,6 +84,7 @@ pub struct Baseliner {
     pub selection_tx: Option<Sender<ControlSnapshot>>,
     pub baseline_metrics: MetricsSender,
     pub event_metrics: MetricsSender,
+    pub ping_metrics: MetricsSender,
 }
 
 fn ewma_factor(tick: f64, dur: f64) -> f64 {
@@ -200,6 +201,20 @@ impl Baseliner {
                 });
                 let _ = self.reselect_trigger.try_send(true);
             }
+
+            self.ping_metrics.send(Metric::Ping {
+                reflector,
+                measurement_type: reply.stream.source,
+                rtt: reply.rtt_ms(),
+                up_time: reply
+                    .one_way
+                    .map(|o| o.uplink.as_nanos() as f64 / 1000000.0)
+                    .unwrap_or(reply.rtt_ms() / 2.0),
+                down_time: reply
+                    .one_way
+                    .map(|o| o.downlink.as_nanos() as f64 / 1000000.0)
+                    .unwrap_or(reply.rtt_ms() / 2.0),
+            });
 
             self.baseline_metrics.send(Metric::Baseline {
                 reflector,

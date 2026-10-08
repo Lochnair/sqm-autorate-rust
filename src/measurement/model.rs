@@ -1,3 +1,4 @@
+use std::fmt::{self, Display};
 use std::{
     net::IpAddr,
     time::{Duration, Instant},
@@ -14,6 +15,18 @@ pub enum MeasurementSource {
     Irtt,
     TcpSeqAck,
     TcpTimestamp,
+}
+
+impl Display for MeasurementSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MeasurementSource::IcmpEcho => write!(f, "icmp"),
+            MeasurementSource::IcmpTimestamp => write!(f, "icmp-timestamps"),
+            MeasurementSource::Irtt => write!(f, "irtt"),
+            MeasurementSource::TcpSeqAck => write!(f, "tcp-seqack"),
+            MeasurementSource::TcpTimestamp => write!(f, "tcp-timestamp"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
