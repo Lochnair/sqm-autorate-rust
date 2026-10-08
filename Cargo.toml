@@ -25,6 +25,7 @@ csv = "1.4.0"
 fastrand = "2"
 flume = { version = "0.12.0",  default-features = false, features = ["async", "eventual-fairness", "select"] }
 icmp-socket2 = { version = "0.6.4", features = ["tokio"] }
+irtt-client = { version = "0.6.0", optional = true, features = ["ancillary", "tokio"] }
 libc = "0.2"
 rustix = { version = "1.1", features = ["fs", "system", "thread", "time"] }
 serde = { version = "1", features = ["derive"] }
@@ -44,10 +45,12 @@ netlink-socket2 = { version = "0.3.3" }
 rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "fcfedd204fb76928ef617bf9631b041c816e03d4", optional = true, default-features = false, }
 
 [features]
-default = ["toml", "uci-vendored"]
+default = ["irtt", "toml", "uci-vendored"]
+irtt = ["dep:irtt-client"]
 toml = ["config/toml"]
 uci = ["dep:rust-uci"]
 uci-vendored = ["uci", "rust-uci/vendored"]
+irtt-client = ["dep:irtt-client"]
 
 [workspace]
 members = ["crates/uci-derive"]

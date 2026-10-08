@@ -22,6 +22,7 @@ mod util;
 use crate::baseliner::Baseliner;
 use crate::controller::Controller;
 use crate::measurement::icmp::IcmpEngine;
+use crate::measurement::irtt::IrttEngine;
 use crate::metrics::{Metric, Metrics, MetricsSender};
 use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
 use crate::ratecontroller::Ratecontroller;
@@ -236,6 +237,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
     let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
     let (icmp_binding_tx, icmp_binding_rx) = flume::unbounded();
+    let (irtt_binding_tx, irtt_binding_rx) = flume::unbounded();
     let (measurement_tx, measurement_rx) = flume::unbounded();
     let (reflector_tx, reflector_rx) = flume::unbounded();
     let (reselect_tx, reselect_rx) = flume::bounded(1);
@@ -247,17 +249,22 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     };
 
     let controller = Controller::new(reflector_rx, icmp_binding_tx);
-    let engine = {
+    let icmp_engine = {
         let _guard = rt.enter();
         IcmpEngine::new(
             start_time,
             &settings.network,
-            measurement_tx,
+            measurement_tx.clone(),
             icmp_binding_rx,
         )?
     };
+    let (_irtt_task, irtt_engine) = {
+        let _guard = rt.enter();
+        IrttEngine::new(start_time, measurement_tx, irtt_binding_rx)?
+    };
 
-    spawn_task(&rt, &error_tx, engine.run());
+    spawn_task(&rt, &error_tx, icmp_engine.run());
+    spawn_task(&rt, &error_tx, irtt_engine.run());
 
     let dropped = Arc::new(AtomicU32::new(0));
 
