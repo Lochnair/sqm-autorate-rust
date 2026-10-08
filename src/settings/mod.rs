@@ -11,11 +11,14 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use uci_derive::{UciConfig, UciSection};
 
-pub(crate) mod uci_schema;
-mod validation;
+#[cfg(all(feature = "uci", unix))]
+use crate::settings::uci::UciSource;
 
 #[cfg(all(feature = "uci", unix))]
-use crate::platform::unix::uci::UciSource;
+pub mod uci;
+
+pub(crate) mod uci_schema;
+mod validation;
 
 struct FlexiBool(bool);
 
