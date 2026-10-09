@@ -52,8 +52,11 @@ jobs:
       - name: Install actionlint
         run: go install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"
       - name: Check workflow syntax
+        # actionlint does not recognize Gitea's built-in checkout action.
         run: |
           "$(go env GOPATH)/bin/actionlint" \
+            -ignore 'specifying action "builtin:checkout" in invalid format' \
+            .gitea/workflows/build.yml \
             .gitea/workflows/ci.yml \
             .gitea/workflows/supply-chain.yml \
             .github/workflows/actions-security.yml \
