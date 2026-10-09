@@ -1,3 +1,40 @@
 [target.x86_64-unknown-freebsd]
 image.name = "ghcr.io/cross-rs/x86_64-unknown-freebsd:local"
 image.toolchain = ["linux/arm64=aarch64-unknown-linux-gnu"]
+
+[build]
+# Vendored UCI searches CMAKE_LIBRARY_PATH for libubox built outside the sysroot.
+pre-build = [
+    "apt-get update && apt-get install -y --no-install-recommends pkg-config",
+    'echo "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)" >> /opt/toolchain.cmake',
+    # Rust's musl std links -lunwind; MIPS cross GCC supplies the unwinder as libgcc_eh.a.
+    '''
+    for cc in /usr/local/bin/mips*-gcc; do
+        [ -x "$cc" ] || continue
+        archive=$("$cc" -print-file-name=libgcc_eh.a)
+        test -f "$archive" || exit 1
+        ln -sf libgcc_eh.a "$(dirname "$archive")/libunwind.a"
+    done
+    ''',
+]
+
+# This target's image was added after the cross 0.2.5 release.
+[target.riscv64gc-unknown-linux-musl]
+image = "ghcr.io/cross-rs/riscv64gc-unknown-linux-musl:main"
+
+# MIPS images exist but are excluded from cross's automatic image selection.
+[target.mips-unknown-linux-musl]
+image = "ghcr.io/cross-rs/mips-unknown-linux-musl:main"
+build-std = ["std", "panic_abort"]
+
+[target.mipsel-unknown-linux-musl]
+image = "ghcr.io/cross-rs/mipsel-unknown-linux-musl:main"
+build-std = ["std", "panic_abort"]
+
+[target.mips64-unknown-linux-muslabi64]
+image = "ghcr.io/cross-rs/mips64-unknown-linux-muslabi64:main"
+build-std = ["std", "panic_abort"]
+
+[target.mips64el-unknown-linux-muslabi64]
+image = "ghcr.io/cross-rs/mips64el-unknown-linux-muslabi64:main"
+build-std = ["std", "panic_abort"]
