@@ -41,7 +41,7 @@ netlink-bindings = { version = "0.3.3", features = ["rt-link", "tc"] }
 netlink-socket2 = { version = "0.3.3" }
 
 [target.'cfg(unix)'.dependencies]
-rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "fcfedd204fb76928ef617bf9631b041c816e03d4", optional = true, default-features = false, }
+rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "6835397f4f4ba8b69e75e727105186865c357417", optional = true, default-features = false }
 
 [features]
 default = ["toml", "uci-vendored"]
