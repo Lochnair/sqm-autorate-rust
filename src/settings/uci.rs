@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::settings::uci_schema::{UciConfigSchema, UciSectionMapping};
+use crate::settings::uci_schema::{UciConfigSchema, UciRepeatedSectionMapping, UciSectionMapping};
 use config::{ConfigError as SourceError, Map, Source, Value, ValueKind};
 
 use rust_uci::config::{
@@ -18,6 +18,7 @@ pub(crate) struct UciSource {
     packages: PackageSelection,
     required: bool,
     schema: &'static [UciSectionMapping],
+    repeated_schema: &'static [UciRepeatedSectionMapping],
     config_dir: Option<PathBuf>,
     save_dir: Option<PathBuf>,
 }
@@ -28,6 +29,7 @@ impl UciSource {
             packages,
             required: true,
             schema: &[],
+            repeated_schema: &[],
             config_dir: None,
             save_dir: None,
         }
@@ -62,6 +64,17 @@ impl UciSource {
 
     pub(crate) fn with_schema(mut self, schema: &'static [UciSectionMapping]) -> Self {
         self.schema = schema;
+        self
+    }
+
+    /// Registers section types collected as arrays of tables at their config paths.
+    /// Absent section types leave the destination unset for Serde/source defaults.
+    #[allow(dead_code)]
+    pub(crate) fn with_repeated_schema(
+        mut self,
+        schema: &'static [UciRepeatedSectionMapping],
+    ) -> Self {
+        self.repeated_schema = schema;
         self
     }
 
@@ -145,6 +158,7 @@ impl UciSource {
         package_name: &str,
         package: &UciPackage,
         values: &mut Map<String, Value>,
+        repeated_values: &mut Map<String, Vec<Value>>,
     ) -> Result<(), SourceError> {
         let sections = package.sections().map_err(|e| {
             SourceError::Message(format!(
@@ -154,6 +168,12 @@ impl UciSource {
         })?;
 
         for section in sections {
+            let repeated_mapping = self
+                .repeated_schema
+                .iter()
+                .find(|mapping| mapping.uci_section == section.type_());
+            let mut section_values = Map::new();
+
             let selector = section.selector().ok_or_else(|| {
                 SourceError::Message(format!(
                     "loaded UCI section of type {:?} in package \
@@ -181,9 +201,21 @@ impl UciSource {
 
                 let source_key = format!("{package_name}.{config_relative_key}");
 
-                let destination_key = self
-                    .mapped_config_key(&selector, option_name)
-                    .unwrap_or(source_key);
+                let repeated_option = repeated_mapping.and_then(|mapping| {
+                    mapping
+                        .options
+                        .iter()
+                        .find(|option| option.uci_option == option_name)
+                });
+
+                let destination_key = if let Some(mapping) = repeated_option {
+                    mapping.config_field.to_owned()
+                } else if repeated_mapping.is_some() {
+                    option_name.to_owned()
+                } else {
+                    self.mapped_config_key(&selector, option_name)
+                        .unwrap_or(source_key)
+                };
 
                 let Some(value) = option.get().map_err(|e| {
                     SourceError::Message(format!(
@@ -210,12 +242,26 @@ impl UciSource {
                     }
                 };
 
-                if values.insert(destination_key.clone(), value).is_some() {
+                let destination = if repeated_mapping.is_some() {
+                    &mut section_values
+                } else {
+                    &mut *values
+                };
+
+                if destination.insert(destination_key.clone(), value).is_some() {
                     return Err(SourceError::Message(format!(
                         "duplicate UCI destination key \
                          {destination_key:?} while mapping {uci_key:?}"
                     )));
                 }
+            }
+
+            if let Some(mapping) = repeated_mapping {
+                let origin = format!("UCI section {package_name}.{selector}");
+                repeated_values
+                    .entry(mapping.config_path.to_owned())
+                    .or_default()
+                    .push(Value::new(Some(&origin), ValueKind::Table(section_values)));
             }
         }
 
@@ -272,6 +318,7 @@ impl Source for UciSource {
         };
 
         let mut values = Map::new();
+        let mut repeated_values = Map::new();
 
         for package in packages {
             let package_name = package
@@ -279,7 +326,22 @@ impl Source for UciSource {
                 .map_err(|e| SourceError::Message(format!("failed to read UCI package name: {e}")))?
                 .to_owned();
 
-            self.collect_package(&package_name, &package, &mut values)?;
+            self.collect_package(&package_name, &package, &mut values, &mut repeated_values)?;
+        }
+
+        for (config_path, sections) in repeated_values {
+            let origin = "UCI repeated sections".to_owned();
+            if values
+                .insert(
+                    config_path.clone(),
+                    Value::new(Some(&origin), ValueKind::Array(sections)),
+                )
+                .is_some()
+            {
+                return Err(SourceError::Message(format!(
+                    "duplicate UCI destination key {config_path:?} while mapping repeated sections"
+                )));
+            }
         }
 
         Ok(values)

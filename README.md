@@ -57,3 +57,23 @@ You can also build an OpenWrt package to install in your images with the SDK:
    # Copy the generated .ipk from bin/packages/... to your router
    opkg install sqm-autorate-rust_*.ipk
    ```
+
+## Reflector files and inline UCI reflectors
+
+Inline `config reflector` sections supplement the default
+`/etc/sqm-autorate-rust/reflectors.csv`. To use only inline reflectors, explicitly
+disable file loading:
+
+```uci
+config reflectors
+    option files 'none'
+
+config reflector
+    option host 'global.irtt.lochnair.net'
+    list protocols 'irtt'
+```
+
+Use `list files '/path/to/reflectors.csv'` instead of `option files 'none'` to
+combine CSV files with inline reflectors. Omitting `files` keeps the default CSV;
+UCI discards empty string options, so `option files ''` does not disable it.
+Absent or blank `irtt_hmac` values use unauthenticated IRTT sessions.

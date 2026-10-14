@@ -7,12 +7,13 @@
 
 use crate::SHUTDOWN;
 use crate::baseliner::ControlSnapshot;
+use crate::measurement::model::MeasurementStream;
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
 use crate::util::RwLockExt;
 use flume::{Receiver, RecvError, RecvTimeoutError, Selector, Sender};
 use log::{debug, info};
-use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::thread::sleep;
@@ -98,18 +99,25 @@ fn receive_snapshots_until(
     }
 }
 
-fn recent_rtt_for_peer(snapshot: Option<&ControlSnapshot>, peer: &IpAddr) -> Option<u64> {
+fn recent_rtt_for_peer(
+    snapshot: Option<&ControlSnapshot>,
+    stream: Option<&MeasurementStream>,
+    now: Instant,
+    max_age: Duration,
+) -> Option<u64> {
     snapshot
-        .and_then(|snapshot| snapshot.reflectors.get(peer))
+        .and_then(|snapshot| stream.and_then(|stream| snapshot.reflectors.get(stream)))
+        .filter(|state| now.saturating_duration_since(state.last_receive_at) < max_age)
         .map(|state| (state.recent.down + state.recent.up) as u64)
 }
 
 pub struct ReflectorSelector {
     pub settings: Settings,
     pub snapshot_rx: Receiver<ControlSnapshot>,
-    pub reflector_peers_lock: Arc<RwLock<Vec<IpAddr>>>,
-    pub reflector_tx: Sender<Vec<IpAddr>>,
-    pub reflector_pool: Vec<IpAddr>,
+    pub reflector_peers_lock: Arc<RwLock<Vec<SocketAddr>>>,
+    pub reflector_tx: Sender<Vec<SocketAddr>>,
+    pub reflector_pool: Vec<SocketAddr>,
+    pub endpoint_streams: Arc<RwLock<std::collections::HashMap<SocketAddr, MeasurementStream>>>,
     pub trigger_channel: Receiver<bool>,
     pub metrics: MetricsSender,
 }
@@ -159,13 +167,11 @@ impl ReflectorSelector {
 
             // After 40 reselections, slow down to every 15 minutes
             if reselection_count > 40 {
-                selector_sleep_time = Duration::new(
-                    self.settings.advanced_settings.peer_reselection_time * 60,
-                    0,
-                );
+                selector_sleep_time =
+                    Duration::new(self.settings.reflectors.peer_reselection_time * 60, 0);
             }
 
-            let mut next_peers: Vec<IpAddr> = Vec::new();
+            let mut next_peers: Vec<SocketAddr> = Vec::new();
             let mut reflectors_peers = self.reflector_peers_lock.write_anyhow()?;
             let current_peers = reflectors_peers.clone();
 
@@ -175,6 +181,9 @@ impl ReflectorSelector {
                 next_peers.push(*reflector);
             }
 
+            if self.reflector_pool.is_empty() {
+                continue;
+            }
             for _ in 0..20 {
                 let next_candidate =
                     &self.reflector_pool[fastrand::usize(..self.reflector_pool.len())];
@@ -208,7 +217,13 @@ impl ReflectorSelector {
             let mut candidates = Vec::new();
 
             for peer in next_peers {
-                if let Some(rtt) = recent_rtt_for_peer(latest_snapshot.as_ref(), &peer) {
+                let stream = self.endpoint_streams.read_anyhow()?.get(&peer).copied();
+                if let Some(rtt) = recent_rtt_for_peer(
+                    latest_snapshot.as_ref(),
+                    stream.as_ref(),
+                    Instant::now(),
+                    Duration::from_secs_f64(self.settings.advanced_settings.tick_interval * 2.0),
+                ) {
                     candidates.push((peer, rtt));
                     info!("Candidate reflector: {} RTT: {}", peer, rtt);
                 } else {
@@ -223,7 +238,7 @@ impl ReflectorSelector {
             candidates.sort_by(|a, b| a.1.cmp(&b.1));
 
             // Now we will just limit the candidates down to 2 * num_reflectors
-            let mut num_reflectors = self.settings.advanced_settings.num_reflectors;
+            let num_reflectors = self.settings.reflectors.num_reflectors;
             let candidate_pool_num = (2 * num_reflectors) as usize;
             candidates.truncate(candidate_pool_num);
 
@@ -245,8 +260,12 @@ impl ReflectorSelector {
             }
 
             if (candidates.len() as u8) < num_reflectors {
-                num_reflectors = candidates.len() as u8;
+                info!(
+                    "Only {} usable reflectors, selecting available candidates",
+                    candidates.len()
+                );
             }
+            let num_reflectors = num_reflectors.min(candidates.len() as u8);
 
             let mut new_peers = Vec::new();
             for i in 0..num_reflectors {
@@ -256,7 +275,7 @@ impl ReflectorSelector {
                 self.metrics.send(Metric::Event {
                     name: "reflector_selected",
                     reason: "",
-                    reflector: Some(peer),
+                    reflector: Some(peer.ip()),
                     tags: &[],
                 });
             }
@@ -271,7 +290,9 @@ impl ReflectorSelector {
 mod tests {
     use super::*;
     use crate::baseliner::{EwmaStats, ReflectorState};
+    use crate::measurement::model::MeasurementSource;
     use std::collections::HashMap;
+    use std::net::IpAddr;
     use std::thread;
 
     fn snapshot(generated_at: Instant) -> ControlSnapshot {
@@ -284,7 +305,11 @@ mod tests {
     fn snapshot_with_rtt(generated_at: Instant, peer: IpAddr, rtt: f64) -> ControlSnapshot {
         let mut reflectors = HashMap::new();
         reflectors.insert(
-            peer,
+            crate::measurement::model::MeasurementStream {
+                id: crate::measurement::model::MeasurementStreamId(0),
+                peer,
+                source: MeasurementSource::IcmpTimestamp,
+            },
             ReflectorState {
                 baseline: EwmaStats {
                     down: rtt / 2.0,
@@ -384,7 +409,7 @@ mod tests {
     #[test]
     fn baseline_wait_retains_snapshot_for_evaluation() {
         let (snapshot_tx, snapshot_rx) = flume::unbounded();
-        let peer = "192.0.2.1".parse().unwrap();
+        let peer: IpAddr = "192.0.2.1".parse().unwrap();
         let generated_at = Instant::now();
         snapshot_tx
             .send(snapshot_with_rtt(generated_at, peer, 20.0))
@@ -405,7 +430,12 @@ mod tests {
         );
 
         assert_eq!(
-            recent_rtt_for_peer(latest_snapshot.as_ref(), &peer),
+            recent_rtt_for_peer(
+                latest_snapshot.as_ref(),
+                latest_snapshot.as_ref().unwrap().reflectors.keys().next(),
+                generated_at + Duration::from_secs(1),
+                Duration::from_secs(2)
+            ),
             Some(42)
         );
     }

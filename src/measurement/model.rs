@@ -20,7 +20,7 @@ pub enum MeasurementSource {
 impl Display for MeasurementSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MeasurementSource::IcmpEcho => write!(f, "icmp"),
+            MeasurementSource::IcmpEcho => write!(f, "icmp-echo"),
             MeasurementSource::IcmpTimestamp => write!(f, "icmp-timestamps"),
             MeasurementSource::Irtt => write!(f, "irtt"),
             MeasurementSource::TcpSeqAck => write!(f, "tcp-seqack"),
@@ -121,6 +121,9 @@ pub struct MeasurementObservation {
     /// Local monotonic time at which the result was observed.
     pub observed_at: Instant,
 
+    /// Measured round-trip latency when it differs from elapsed local time.
+    pub round_trip: Option<SignedDuration>,
+
     /// Directional timing, when the measurement mechanism can provide it.
     pub one_way: Option<OneWayLatency>,
 }
@@ -131,7 +134,10 @@ impl MeasurementObservation {
     }
 
     pub fn rtt_ms(&self) -> f64 {
-        self.rtt().as_secs_f64() * 1000.0
+        self.round_trip
+            .map(SignedDuration::as_secs_f64)
+            .unwrap_or_else(|| self.rtt().as_secs_f64())
+            * 1000.0
     }
 }
 

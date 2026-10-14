@@ -9,13 +9,13 @@ use syn::{Data, DeriveInput, Field, Fields, FieldsNamed, LitStr, Token, parse_ma
 
 /// Generates `UciSectionSchema` from a settings struct.
 ///
-/// Every named field is mapped one-to-one:
+/// Every named field without `#[uci(skip)]` is mapped one-to-one:
 ///
 /// ```text
 /// Rust field name -> UCI option name
 /// Rust field name -> config-rs field name
 /// ```
-#[proc_macro_derive(UciSection)]
+#[proc_macro_derive(UciSection, attributes(uci))]
 pub fn derive_uci_section(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -56,26 +56,28 @@ fn expand_uci_section(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStre
     let struct_name = &input.ident;
     let fields = require_named_fields(input)?;
 
-    let mappings = fields
-        .named
-        .iter()
-        .map(|field| {
-            let field_ident = field
-                .ident
-                .as_ref()
-                .expect("named fields always have identifiers");
+    let mut mappings = Vec::with_capacity(fields.named.len());
 
-            let field_name = field_ident.unraw().to_string();
-            let field_name = LitStr::new(&field_name, field_ident.span());
+    for field in &fields.named {
+        if parse_skip(field)? {
+            continue;
+        }
 
-            quote! {
-                crate::settings::uci_schema::UciOptionMapping {
-                    uci_option: #field_name,
-                    config_field: #field_name,
-                }
+        let field_ident = field
+            .ident
+            .as_ref()
+            .expect("named fields always have identifiers");
+
+        let field_name = field_ident.unraw().to_string();
+        let field_name = LitStr::new(&field_name, field_ident.span());
+
+        mappings.push(quote! {
+            crate::settings::uci_schema::UciOptionMapping {
+                uci_option: #field_name,
+                config_field: #field_name,
             }
-        })
-        .collect::<Vec<_>>();
+        });
+    }
 
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
@@ -94,6 +96,29 @@ fn expand_uci_section(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStre
             ];
         }
     })
+}
+
+fn parse_skip(field: &Field) -> syn::Result<bool> {
+    let mut skip = false;
+
+    for attribute in &field.attrs {
+        if !attribute.path().is_ident("uci") {
+            continue;
+        }
+
+        attribute.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("skip") {
+                return Err(meta.error("expected `skip`"));
+            }
+            if skip {
+                return Err(meta.error("duplicate `skip` attribute"));
+            }
+            skip = true;
+            Ok(())
+        })?;
+    }
+
+    Ok(skip)
 }
 
 fn expand_uci_config(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {

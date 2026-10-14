@@ -6,13 +6,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::SHUTDOWN;
-use crate::measurement::model::{MeasurementEvent, MeasurementObservation};
+use crate::measurement::model::{MeasurementEvent, MeasurementObservation, MeasurementStream};
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
 use flume::{Receiver, Sender};
 use log::{debug, info};
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -72,7 +71,7 @@ impl ReflectorState {
 #[derive(Clone, Debug)]
 pub struct ControlSnapshot {
     pub generated_at: Instant,
-    pub reflectors: HashMap<IpAddr, ReflectorState>,
+    pub reflectors: HashMap<MeasurementStream, ReflectorState>,
 }
 
 pub struct Baseliner {
@@ -121,7 +120,7 @@ fn update_reflector_state(
 }
 
 fn process_reply(
-    reflectors: &mut HashMap<IpAddr, ReflectorState>,
+    reflectors: &mut HashMap<MeasurementStream, ReflectorState>,
     reply: &MeasurementObservation,
     start_time: Instant,
     slow_factor: f64,
@@ -129,7 +128,7 @@ fn process_reply(
 ) -> (ReflectorState, bool) {
     let sample = EwmaStats::from_reply(reply);
     let state = reflectors
-        .entry(reply.stream.peer)
+        .entry(reply.stream)
         .or_insert_with(|| ReflectorState::new(sample, reply.observed_at));
     let anomaly = update_reflector_state(
         state,
@@ -144,7 +143,7 @@ fn process_reply(
 }
 
 fn control_snapshot(
-    reflectors: &HashMap<IpAddr, ReflectorState>,
+    reflectors: &HashMap<MeasurementStream, ReflectorState>,
     generated_at: Instant,
 ) -> ControlSnapshot {
     ControlSnapshot {
@@ -155,7 +154,7 @@ fn control_snapshot(
 
 impl Baseliner {
     pub fn run(&self) -> anyhow::Result<()> {
-        let mut reflectors = HashMap::<IpAddr, ReflectorState>::new();
+        let mut reflectors = HashMap::<MeasurementStream, ReflectorState>::new();
 
         let slow_factor = ewma_factor(
             self.settings.advanced_settings.tick_interval,
@@ -249,6 +248,7 @@ mod tests {
         MeasurementSource, MeasurementStream, MeasurementStreamId, OneWayClock, OneWayLatency,
         SignedDuration,
     };
+    use std::net::IpAddr;
     use std::time::Duration;
 
     fn state(
@@ -289,6 +289,7 @@ mod tests {
             },
             started_at: received_at,
             observed_at: received_at,
+            round_trip: None,
             one_way: Some(OneWayLatency {
                 uplink: SignedDuration::from_millis(up_time as i64),
                 downlink: SignedDuration::from_millis(down_time as i64),
@@ -434,7 +435,8 @@ mod tests {
         let received_at = start + Duration::from_secs(1);
         let reflector = "192.0.2.1".parse().unwrap();
         let mut reflectors = HashMap::new();
-        reflectors.insert(reflector, state(100.0, 100.0, 100.0, 100.0, start));
+        let stream = reply(reflector, 0.0, 0.0, start).stream;
+        reflectors.insert(stream, state(100.0, 100.0, 100.0, 100.0, start));
 
         let (updated, anomaly) = process_reply(
             &mut reflectors,
@@ -450,7 +452,7 @@ mod tests {
         assert_close(updated.recent.down, 150.0);
         assert_close(updated.recent.up, 200.0);
         assert_eq!(updated.last_receive_at, received_at);
-        assert_close(reflectors[&reflector].recent.up, 200.0);
+        assert_close(reflectors[&stream].recent.up, 200.0);
     }
 
     #[test]
@@ -469,14 +471,15 @@ mod tests {
             0.5,
         );
         let snapshot = control_snapshot(&reflectors, generated_at);
+        let stream = reply(reflector, 0.0, 0.0, received_at).stream;
 
         assert!(!anomaly);
         assert_eq!(snapshot.generated_at, generated_at);
         assert_close(
-            snapshot.reflectors[&reflector].baseline.down,
+            snapshot.reflectors[&stream].baseline.down,
             updated.baseline.down,
         );
-        assert_close(snapshot.reflectors[&reflector].recent.up, updated.recent.up);
-        assert_eq!(snapshot.reflectors[&reflector].last_receive_at, received_at);
+        assert_close(snapshot.reflectors[&stream].recent.up, updated.recent.up);
+        assert_eq!(snapshot.reflectors[&stream].last_receive_at, received_at);
     }
 }

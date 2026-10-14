@@ -19,6 +19,18 @@ pub(crate) struct UciSectionMapping {
     pub(crate) options: &'static [UciOptionMapping],
 }
 
+#[cfg(all(feature = "uci", unix))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UciRepeatedSectionMapping {
+    /// UCI section type, for both named and anonymous sections.
+    pub(crate) uci_section: &'static str,
+
+    /// Config-rs / Serde path receiving an array of section tables.
+    pub(crate) config_path: &'static str,
+
+    pub(crate) options: &'static [UciOptionMapping],
+}
+
 pub(crate) trait UciSectionSchema {
     const UCI_OPTIONS: &'static [UciOptionMapping];
 }
