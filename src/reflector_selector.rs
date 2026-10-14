@@ -167,6 +167,7 @@ impl ReflectorSelector {
 
             let mut next_peers: Vec<IpAddr> = Vec::new();
             let mut reflectors_peers = self.reflector_peers_lock.write_anyhow()?;
+            let current_peers = reflectors_peers.clone();
 
             // Include all current peers
             for reflector in reflectors_peers.iter() {
@@ -234,6 +235,13 @@ impl ReflectorSelector {
             for i in (1_usize..candidates.len()).rev() {
                 let j = fastrand::usize(0..=i);
                 candidates.swap(i, j);
+            }
+
+            if candidates.is_empty() {
+                info!("No usable reflectors, retaining current set");
+                self.reflector_tx.send(current_peers.clone())?;
+                *reflectors_peers = current_peers;
+                continue;
             }
 
             if (candidates.len() as u8) < num_reflectors {
