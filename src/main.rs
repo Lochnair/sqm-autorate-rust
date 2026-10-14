@@ -22,16 +22,19 @@ mod util;
 use crate::baseliner::Baseliner;
 use crate::controller::Controller;
 use crate::measurement::icmp::IcmpEngine;
+#[cfg(feature = "irtt")]
+use crate::measurement::irtt::IrttEngine;
+use crate::measurement::model::{MeasurementSource, MeasurementStream};
 use crate::metrics::{Metric, Metrics, MetricsSender};
 use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
 use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
-use crate::settings::Settings;
+use crate::settings::{ReflectorDefinition, ReflectorProtocol, Settings};
 use crate::util::RwLockExt;
 use ::log::{info, warn};
 use flume::RecvTimeoutError;
-use std::net::IpAddr;
-use std::str::FromStr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -39,8 +42,11 @@ use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
 
 struct ReflectorSetup {
-    peers: Arc<RwLock<Vec<IpAddr>>>,
-    pool: Vec<IpAddr>,
+    peers: Arc<RwLock<Vec<SocketAddr>>>,
+    active_streams: Arc<RwLock<Vec<MeasurementStream>>>,
+    endpoint_streams: Arc<RwLock<HashMap<SocketAddr, MeasurementStream>>>,
+    pool: Vec<SocketAddr>,
+    reflectors: HashMap<SocketAddr, ReflectorDefinition>,
     reselection_enabled: bool,
 }
 pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -134,29 +140,126 @@ fn restore_shaper<T: TrafficControlBackend>(
     }
 }
 
-fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
-    let configured = settings.load_reflectors()?;
-    let configured_count = configured.len();
+fn resolve_reflectors(
+    definitions: &[ReflectorDefinition],
+    protocol: ReflectorProtocol,
+    countries: &[String],
+    filter_country: bool,
+) -> anyhow::Result<HashMap<SocketAddr, ReflectorDefinition>> {
+    let mut resolved = HashMap::new();
+    for definition in definitions {
+        if !definition.protocols.contains(&protocol) {
+            continue;
+        }
+        if protocol != ReflectorProtocol::Irtt
+            && definition
+                .host
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.is_ipv6())
+        {
+            continue;
+        }
+        if filter_country
+            && !countries.is_empty()
+            && definition.country.as_ref().is_some_and(|country| {
+                !countries
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(country))
+            })
+        {
+            continue;
+        }
+        let port = if protocol == ReflectorProtocol::Irtt {
+            definition.irtt_port.unwrap_or(2112)
+        } else {
+            0
+        };
+        let endpoints = match (definition.host.as_str(), port).to_socket_addrs() {
+            Ok(endpoints) => endpoints,
+            Err(error) => {
+                warn!("Failed to resolve reflector {}: {error}", definition.host);
+                continue;
+            }
+        };
+        for endpoint in endpoints {
+            if protocol != ReflectorProtocol::Irtt && endpoint.is_ipv6() {
+                continue;
+            }
+            insert_reflector(&mut resolved, endpoint, definition.clone())?;
+        }
+    }
+    Ok(resolved)
+}
 
-    let default_reflectors = [
-        IpAddr::from_str("9.9.9.9")?,
-        IpAddr::from_str("8.238.120.14")?,
-        IpAddr::from_str("74.82.42.42")?,
-        IpAddr::from_str("194.242.2.2")?,
-        IpAddr::from_str("208.67.222.222")?,
-        IpAddr::from_str("94.140.14.14")?,
-    ];
-
-    let reselection_enabled = configured_count > settings.advanced_settings.num_reflectors as usize;
-    let pool = if reselection_enabled {
-        configured
+fn insert_reflector(
+    reflectors: &mut HashMap<SocketAddr, ReflectorDefinition>,
+    endpoint: SocketAddr,
+    definition: ReflectorDefinition,
+) -> anyhow::Result<()> {
+    if let Some(existing) = reflectors.get_mut(&endpoint) {
+        let same_country = match (&existing.country, &definition.country) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            _ => true,
+        };
+        let same_protocols = existing
+            .protocols
+            .iter()
+            .all(|p| definition.protocols.contains(p))
+            && definition
+                .protocols
+                .iter()
+                .all(|p| existing.protocols.contains(p));
+        if !same_country
+            || !same_protocols
+            || existing.irtt_port.unwrap_or(2112) != definition.irtt_port.unwrap_or(2112)
+            || existing.irtt_hmac != definition.irtt_hmac
+        {
+            anyhow::bail!("conflicting reflector definitions for resolved endpoint {endpoint}");
+        }
+        if existing.country.is_none() {
+            existing.country = definition.country;
+        }
     } else {
-        Vec::new()
-    };
+        reflectors.insert(endpoint, definition);
+    }
+    Ok(())
+}
+
+fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
+    let protocol = settings.advanced_settings.measurement_type;
+    let configured = resolve_reflectors(
+        &settings.reflectors.entries,
+        protocol,
+        &settings.reflectors.countries,
+        true,
+    )?;
+    let bootstrap = resolve_reflectors(&settings.reflectors.bootstrap, protocol, &[], false)?;
+    let mut reflectors = bootstrap.clone();
+    for (endpoint, definition) in &configured {
+        insert_reflector(&mut reflectors, *endpoint, definition.clone())?;
+    }
+    if reflectors.is_empty() {
+        anyhow::bail!("no usable reflectors for measurement protocol {protocol}");
+    }
+    let mut pool = configured.keys().copied().collect::<Vec<_>>();
+    pool.sort();
+    let mut initial = bootstrap.keys().copied().collect::<Vec<_>>();
+    initial.sort();
+    if initial.is_empty() {
+        initial = pool
+            .iter()
+            .take(settings.reflectors.num_reflectors as usize)
+            .copied()
+            .collect();
+    }
+    let reselection_enabled = pool.len() > settings.reflectors.num_reflectors as usize;
 
     Ok(ReflectorSetup {
-        peers: Arc::new(RwLock::new(default_reflectors.to_vec())),
+        peers: Arc::new(RwLock::new(initial)),
+        active_streams: Arc::new(RwLock::new(Vec::new())),
+        endpoint_streams: Arc::new(RwLock::new(HashMap::new())),
         pool,
+        reflectors,
         reselection_enabled,
     })
 }
@@ -219,6 +322,12 @@ fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()
 }
 
 fn run(settings: &Settings) -> anyhow::Result<()> {
+    #[cfg(not(feature = "irtt"))]
+    if settings.advanced_settings.measurement_type == ReflectorProtocol::Irtt {
+        anyhow::bail!(
+            "IRTT measurement selected, but this binary was built without the `irtt` feature"
+        );
+    }
     let rt = tokio::runtime::Runtime::new()?;
 
     if settings.advanced_settings.dry_run {
@@ -229,13 +338,18 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
 
     let ReflectorSetup {
         peers: reflector_peers,
+        active_streams,
+        endpoint_streams,
         pool: reflector_pool,
+        reflectors,
         reselection_enabled,
     } = setup_reflectors(settings)?;
 
     let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
     let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
     let (icmp_binding_tx, icmp_binding_rx) = flume::unbounded();
+    #[cfg(feature = "irtt")]
+    let (irtt_binding_tx, irtt_binding_rx) = flume::unbounded();
     let (measurement_tx, measurement_rx) = flume::unbounded();
     let (reflector_tx, reflector_rx) = flume::unbounded();
     let (reselect_tx, reselect_rx) = flume::bounded(1);
@@ -246,18 +360,45 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         (None, None)
     };
 
-    let controller = Controller::new(reflector_rx, icmp_binding_tx);
-    let engine = {
+    let source = match settings.advanced_settings.measurement_type {
+        ReflectorProtocol::IcmpEcho => MeasurementSource::IcmpEcho,
+        ReflectorProtocol::IcmpTimestamps => MeasurementSource::IcmpTimestamp,
+        ReflectorProtocol::Irtt => MeasurementSource::Irtt,
+    };
+    let controller = Controller::new(
+        reflector_rx,
+        icmp_binding_tx,
+        #[cfg(feature = "irtt")]
+        irtt_binding_tx,
+        reflectors,
+        Arc::clone(&active_streams),
+        Arc::clone(&endpoint_streams),
+        source,
+        Duration::from_secs_f64(settings.advanced_settings.tick_interval),
+    );
+    let icmp_engine = {
         let _guard = rt.enter();
         IcmpEngine::new(
             start_time,
             &settings.network,
-            measurement_tx,
+            measurement_tx.clone(),
             icmp_binding_rx,
         )?
     };
+    #[cfg(feature = "irtt")]
+    let (irtt_task, irtt_engine) = {
+        let _guard = rt.enter();
+        IrttEngine::new(
+            Duration::from_secs_f64(settings.advanced_settings.tick_interval),
+            &settings.network,
+            measurement_tx,
+            irtt_binding_rx,
+        )?
+    };
 
-    spawn_task(&rt, &error_tx, engine.run());
+    spawn_task(&rt, &error_tx, icmp_engine.run());
+    #[cfg(feature = "irtt")]
+    spawn_task(&rt, &error_tx, irtt_engine.run(irtt_task));
 
     let dropped = Arc::new(AtomicU32::new(0));
 
@@ -329,6 +470,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
                 .expect("reselection snapshot receiver must exist when reselection is enabled"),
             reflector_peers_lock: Arc::clone(&reflector_peers),
             reflector_pool,
+            endpoint_streams,
             trigger_channel: reselect_rx,
             metrics: event_metrics,
             reflector_tx,
@@ -342,7 +484,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let mut ratecontroller = Ratecontroller::new(
         settings.clone(),
         control_snapshot_rx,
-        reflector_peers,
+        active_streams,
         reselect_tx,
         rate_metrics,
     )?;

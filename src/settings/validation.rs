@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MPL-2.0
 //
 
+use crate::settings::ReflectorSettings;
+
 use super::{AdvancedSettings, NetworkSettings, ObservabilitySettings, OutputSettings, Settings};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -88,6 +90,7 @@ impl Settings {
         let mut report = ValidationReport::default();
 
         self.network.validate(&mut report);
+        self.reflectors.validate(&mut report);
         self.output.validate(&mut report);
         self.observability.validate(&mut report);
         self.advanced_settings.validate(&mut report);
@@ -185,6 +188,60 @@ impl NetworkSettings {
                         "results in a minimum upload rate of only {minimum:.0} kbit/s \
                          ({:.1}% of {:.0} kbit/s); connectivity may become severely constrained",
                         self.upload_min_percent, self.upload_base_kbits,
+                    ),
+                );
+            }
+        }
+    }
+}
+
+impl ReflectorSettings {
+    fn validate(&self, report: &mut ValidationReport) {
+        if self.num_reflectors == 0 {
+            report.error("reflectors.num_reflectors", "must be greater than 0");
+        }
+
+        if self.peer_reselection_time == 0 {
+            report.error("reflectors.peer_reselection_time", "must be greater than 0");
+        }
+
+        if self.files.is_empty() && self.entries.is_empty() {
+            report.error(
+                "reflectors",
+                "at least one reflector file or inline entry is required",
+            );
+        }
+
+        for (index, reflector) in self.entries.iter().enumerate() {
+            if reflector.host.trim().is_empty() {
+                report.error(
+                    "reflectors.entries",
+                    format!("entry {index} must have a nonempty host"),
+                );
+            }
+            if reflector.protocols.is_empty() {
+                report.error(
+                    "reflectors.entries",
+                    format!("entry {index} must have at least one measurement protocol"),
+                );
+            }
+        }
+
+        for (index, file) in self.files.iter().enumerate() {
+            if file.trim().is_empty() {
+                report.error(
+                    "reflectors.files",
+                    format!("entry {index} must not be empty"),
+                );
+            }
+        }
+
+        for (index, country) in self.countries.iter().enumerate() {
+            if country.len() != 2 || !country.bytes().all(|c| c.is_ascii_alphabetic()) {
+                report.error(
+                    "reflectors.countries",
+                    format!(
+                        "entry {index} ({country:?}) must be an ISO 3166-1 alpha-2 country code"
                     ),
                 );
             }
@@ -297,24 +354,6 @@ impl AdvancedSettings {
             "advanced_settings.tick_interval",
             self.tick_interval,
         );
-
-        if self.num_reflectors < 5 {
-            report.error(
-                "advanced_settings.num_reflectors",
-                format!("must be at least 5, got {}", self.num_reflectors,),
-            );
-        }
-
-        if self.peer_reselection_time == 0 {
-            report.error(
-                "advanced_settings.peer_reselection_time",
-                "must be greater than 0",
-            );
-        }
-
-        if self.reflector_list_file.trim().is_empty() {
-            report.error("advanced_settings.reflector_list_file", "must not be empty");
-        }
 
         if self.speed_hist_size == 0 {
             report.error(
