@@ -491,12 +491,18 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         self.state_dl.deltas = down_deltas;
         self.state_ul.deltas = up_deltas;
 
-        if self.state_dl.deltas.len() < 5 || self.state_ul.deltas.len() < 5 {
+        let minimum =
+            usize::from(self.settings.advanced_settings.num_reflectors).min(reflectors.len());
+        if reflectors.is_empty()
+            || self.state_dl.deltas.len() < minimum
+            || self.state_ul.deltas.len() < minimum
+        {
             // trigger reselection
             warn!(
-                "Not enough delta values (D: {}, U: {}, need 5), triggering reselection",
+                "Not enough delta values (D: {}, U: {}, need {}), triggering reselection",
                 self.state_dl.deltas.len(),
-                self.state_ul.deltas.len()
+                self.state_ul.deltas.len(),
+                minimum
             );
             let _ = self.reselect_trigger.try_send(true);
         }
