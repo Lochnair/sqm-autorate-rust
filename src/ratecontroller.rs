@@ -7,6 +7,7 @@
 
 use crate::SHUTDOWN;
 use crate::baseliner::ControlSnapshot;
+use crate::measurement::model::MeasurementStream;
 use crate::metrics::{Metric, MetricsSender};
 use crate::platform::{
     InterfaceStatsProvider, PlatformInterfaceStats, PlatformTrafficControl, TrafficControlBackend,
@@ -19,7 +20,6 @@ use flume::{Receiver, Sender};
 use log::{debug, info, warn};
 use std::fs::File;
 use std::io::Write;
-use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -100,7 +100,7 @@ fn drain_latest_snapshot(
 
 fn deltas_from_snapshot(
     snapshot: Option<&ControlSnapshot>,
-    reflectors: &[IpAddr],
+    reflectors: &[MeasurementStream],
     now: Instant,
     tick_interval: f64,
 ) -> (Vec<f64>, Vec<f64>) {
@@ -123,8 +123,8 @@ fn deltas_from_snapshot(
             up.push(up_delta);
 
             debug!(
-                "Reflector: {} down_delay: {} up_delay: {}",
-                reflector, down_delta, up_delta
+                "Reflector: {} ({:?}) down_delay: {} up_delay: {}",
+                reflector.peer, reflector.source, down_delta, up_delta
             );
         }
     }
@@ -139,7 +139,7 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
     settings: Settings,
     control_snapshot: Option<ControlSnapshot>,
     control_snapshot_rx: Receiver<ControlSnapshot>,
-    reflectors_lock: ArcRwLock<Vec<IpAddr>>,
+    reflectors_lock: ArcRwLock<Vec<MeasurementStream>>,
     reselect_trigger: Sender<bool>,
     state_dl: State<T::Handle>,
     state_ul: State<T::Handle>,
@@ -153,7 +153,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
     fn new_with_backends(
         settings: Settings,
         control_snapshot_rx: Receiver<ControlSnapshot>,
-        reflectors_lock: ArcRwLock<Vec<IpAddr>>,
+        reflectors_lock: ArcRwLock<Vec<MeasurementStream>>,
         reselect_trigger: Sender<bool>,
         metrics: MetricsSender,
         mut stats_provider: S,
@@ -491,8 +491,7 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         self.state_dl.deltas = down_deltas;
         self.state_ul.deltas = up_deltas;
 
-        let minimum =
-            usize::from(self.settings.advanced_settings.num_reflectors).min(reflectors.len());
+        let minimum = usize::from(self.settings.reflectors.num_reflectors).min(reflectors.len());
         if reflectors.is_empty()
             || self.state_dl.deltas.len() < minimum
             || self.state_ul.deltas.len() < minimum
@@ -515,7 +514,7 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
     pub fn new(
         settings: Settings,
         control_snapshot_rx: Receiver<ControlSnapshot>,
-        reflectors_lock: ArcRwLock<Vec<IpAddr>>,
+        reflectors_lock: ArcRwLock<Vec<MeasurementStream>>,
         reselect_trigger: Sender<bool>,
         metrics: MetricsSender,
     ) -> anyhow::Result<Self> {
@@ -536,7 +535,17 @@ impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
 mod tests {
     use super::*;
     use crate::baseliner::{EwmaStats, ReflectorState};
+    use crate::measurement::model::{MeasurementSource, MeasurementStreamId};
     use std::collections::HashMap;
+    use std::net::IpAddr;
+
+    fn stream(id: u64, peer: IpAddr) -> MeasurementStream {
+        MeasurementStream {
+            id: MeasurementStreamId(id),
+            peer,
+            source: MeasurementSource::IcmpTimestamp,
+        }
+    }
 
     #[test]
     fn fixed_seed_reproduces_initial_safe_rates() {
@@ -570,7 +579,7 @@ mod tests {
     }
 
     fn snapshot(generated_at: Instant, marker: f64) -> ControlSnapshot {
-        let reflector = "192.0.2.1".parse().unwrap();
+        let reflector = stream(0, "192.0.2.1".parse().unwrap());
         ControlSnapshot {
             generated_at,
             reflectors: HashMap::from([(
@@ -596,7 +605,9 @@ mod tests {
         assert!(rx.is_empty());
         assert_eq!(latest.generated_at, newest_at);
         assert_eq!(
-            latest.reflectors[&"192.0.2.1".parse().unwrap()].recent.down,
+            latest.reflectors[&stream(0, "192.0.2.1".parse().unwrap())]
+                .recent
+                .down,
             2.0
         );
     }
@@ -604,10 +615,10 @@ mod tests {
     #[test]
     fn calculates_sorted_deltas_from_active_fresh_snapshot_state() {
         let now = Instant::now();
-        let first: IpAddr = "192.0.2.1".parse().unwrap();
-        let second: IpAddr = "192.0.2.2".parse().unwrap();
-        let stale: IpAddr = "192.0.2.3".parse().unwrap();
-        let inactive: IpAddr = "192.0.2.4".parse().unwrap();
+        let first = stream(0, "192.0.2.1".parse().unwrap());
+        let second = stream(1, "192.0.2.2".parse().unwrap());
+        let stale = stream(2, "192.0.2.3".parse().unwrap());
+        let inactive = stream(3, "192.0.2.4".parse().unwrap());
         let snapshot = ControlSnapshot {
             generated_at: now,
             reflectors: HashMap::from([

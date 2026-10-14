@@ -326,6 +326,7 @@ impl IcmpEngine {
                     stream: probe.stream,
                     started_at: probe.sent_at,
                     observed_at,
+                    round_trip: None,
                     one_way: None,
                 })
             }
@@ -385,6 +386,7 @@ impl IcmpEngine {
                     stream: probe.stream,
                     started_at: probe.sent_at,
                     observed_at,
+                    round_trip: None,
                     one_way: Some(OneWayLatency {
                         uplink: SignedDuration::from_millis(uplink_ms),
                         downlink: SignedDuration::from_millis(downlink_ms),
