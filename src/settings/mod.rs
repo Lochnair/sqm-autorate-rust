@@ -17,6 +17,7 @@ use crate::settings::uci::UciSource;
 #[cfg(all(feature = "uci", unix))]
 pub mod uci;
 
+#[cfg(all(feature = "uci", unix))]
 pub(crate) mod uci_schema;
 mod validation;
 

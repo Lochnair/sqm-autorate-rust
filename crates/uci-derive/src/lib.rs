@@ -80,6 +80,7 @@ fn expand_uci_section(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStre
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
+        #[cfg(all(feature = "uci", unix))]
         #[automatically_derived]
         impl #impl_generics
             crate::settings::uci_schema::UciSectionSchema
@@ -130,6 +131,7 @@ fn expand_uci_config(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
 
     Ok(quote! {
+        #[cfg(all(feature = "uci", unix))]
         #[automatically_derived]
         impl #impl_generics
             crate::settings::uci_schema::UciConfigSchema
