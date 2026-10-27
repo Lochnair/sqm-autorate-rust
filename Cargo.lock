@@ -336,9 +336,9 @@ dependencies = [
 
 [[package]]
 name = "irtt-client"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a59c24704bd94f19b84b2b0190aa9163efede499f8cf4eb02922443cfee08339"
+checksum = "f353c4b64006ca005136724a63616a086176893950539890374d60bc75ce346b"
 dependencies = [
  "irtt-proto",
  "nix",
@@ -349,9 +349,9 @@ dependencies = [
 
 [[package]]
 name = "irtt-proto"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a56ff307983b8f6477724e08cf726c5e24975b9affeb853d0830d91c60026ab2"
+checksum = "8c33eda73ad0ac5104d871fa72bdd13ea496ae63f9a564d109ca44edac321f6f"
 dependencies = [
  "hmac",
  "md-5",
