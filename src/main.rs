@@ -398,13 +398,13 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let dropped = Arc::new(AtomicU32::new(0));
 
     let (metrics_tx, metrics_thread_handle) = if settings.observability.enabled {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1000);
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
         let metrics = Metrics {
             settings: settings.clone(),
             metrics_rx: rx,
             metrics_dropped: Arc::clone(&dropped),
         };
-        let handle = spawn_worker("metrics", &error_tx, move || metrics.run())?;
+        let handle = spawn_task(&rt, &error_tx, metrics.run());
         (Some(tx), Some(handle))
     } else {
         (None, None)
@@ -506,7 +506,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     drop(metrics_tx);
 
     if let Some(handle) = metrics_thread_handle {
-        let _ = handle.join();
+        let _ = rt.block_on(handle);
     }
 
     restore_shaper(

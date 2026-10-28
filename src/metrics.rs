@@ -8,13 +8,13 @@ use crate::settings::Settings;
 use crate::time::{ClockSample, Realtime};
 use log::{error, info, warn};
 use std::fmt::Write;
-use std::net::{IpAddr, TcpStream, UdpSocket};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc;
-use std::sync::mpsc::RecvTimeoutError;
-use std::sync::mpsc::SyncSender;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc;
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;
 
@@ -29,10 +29,9 @@ enum Transport {
 }
 
 impl Transport {
-    fn new_udp(host: &str, port: u16) -> anyhow::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.set_write_timeout(Some(Duration::from_millis(100)))?;
-        socket.connect((host, port))?;
+    async fn new_udp(host: &str, port: u16) -> anyhow::Result<Self> {
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        socket.connect((host, port)).await?;
         Ok(Transport::Udp(socket))
     }
 
@@ -45,11 +44,15 @@ impl Transport {
         }
     }
 
-    fn send(&mut self, data: &str) {
+    async fn send(&mut self, data: &str) {
         match self {
             Transport::Udp(socket) => {
-                if let Err(e) = socket.send(data.as_bytes()) {
-                    warn!("UDP send failed: {}", e);
+                match tokio::time::timeout(Duration::from_millis(100), socket.send(data.as_bytes()))
+                    .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => warn!("UDP send failed: {e}"),
+                    Err(_) => warn!("UDP send timed out"),
                 }
             }
             Transport::Tcp {
@@ -59,9 +62,8 @@ impl Transport {
                 reconnect_backoff,
             } => {
                 if stream.is_none() {
-                    match TcpStream::connect((host.as_str(), *port)) {
+                    match TcpStream::connect((host.as_str(), *port)).await {
                         Ok(s) => {
-                            s.set_write_timeout(Some(Duration::from_millis(500))).ok();
                             info!("Connected to metrics collector at {}:{}", host, port);
                             *stream = Some(s);
                             *reconnect_backoff = 1;
@@ -79,14 +81,19 @@ impl Transport {
                 }
 
                 let full_data = format!("{}\n", data);
-                // take the stream out, write, put it back or set None on failure
-                let write_error = stream
-                    .as_mut()
-                    .and_then(|s| std::io::Write::write_all(s, full_data.as_bytes()).err());
-                if let Some(e) = write_error {
-                    warn!("TCP send failed: {}", e);
-                    *stream = None;
-                    *reconnect_backoff = (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
+
+                if let Some(s) = stream.as_mut() {
+                    let result = tokio::time::timeout(
+                        Duration::from_millis(500),
+                        s.write_all(full_data.as_bytes()),
+                    )
+                    .await;
+
+                    if !matches!(result, Ok(Ok(()))) {
+                        warn!("TCP send failed: {result:?}");
+                        *stream = None;
+                        *reconnect_backoff = (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
+                    }
                 }
             }
         }
@@ -129,12 +136,12 @@ pub enum Metric {
 
 #[derive(Clone)]
 pub struct MetricsSender {
-    tx: Option<SyncSender<(Metric, u64)>>,
+    tx: Option<mpsc::Sender<(Metric, u64)>>,
     dropped: Arc<AtomicU32>,
 }
 
 impl MetricsSender {
-    pub fn new(tx: SyncSender<(Metric, u64)>, dropped: Arc<AtomicU32>) -> Self {
+    pub fn new(tx: mpsc::Sender<(Metric, u64)>, dropped: Arc<AtomicU32>) -> Self {
         Self {
             tx: Some(tx),
             dropped,
@@ -165,7 +172,7 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         let host = match &self.settings.observability.host {
             Some(h) => h.clone(),
             None => {
@@ -182,7 +189,7 @@ impl Metrics {
         let mut transport = match self.settings.observability.protocol {
             ObservabilityProtocol::Udp => {
                 info!("Metrics exporter configured for UDP to {}:{}", host, port);
-                Transport::new_udp(&host, port)?
+                Transport::new_udp(&host, port).await?
             }
             ObservabilityProtocol::Tcp => {
                 info!("Metrics exporter configured for TCP to {}:{}", host, port);
@@ -194,21 +201,26 @@ impl Metrics {
 
         loop {
             // block until first metric or timeout
-            match self.metrics_rx.recv_timeout(timeout) {
-                Ok(metric) => batch.push(metric),
-                Err(RecvTimeoutError::Timeout) => {
+            tokio::select! {
+                metric = self.metrics_rx.recv() => {
+                    match metric {
+                        Some(metric) => batch.push(metric),
+                        None => break,
+                    }
+                }
+
+                _ = tokio::time::sleep(timeout) => {
                     let dropped = self.metrics_dropped.swap(0, Ordering::Relaxed);
                     if dropped > 0 {
                         let ts = ClockSample::<Realtime>::now().as_nanos();
                         batch.push((Metric::Dropped { count: dropped }, ts));
                     }
                     if !batch.is_empty() {
-                        self.flush(&mut transport, &batch, host_tag);
+                        self.flush(&mut transport, &batch, host_tag).await;
                         batch.clear();
                     }
                     continue;
                 }
-                Err(RecvTimeoutError::Disconnected) => break,
             }
 
             // greedily drain without blocking
@@ -220,7 +232,7 @@ impl Metrics {
             }
 
             if batch.len() >= batch_size {
-                self.flush(&mut transport, &batch, host_tag);
+                self.flush(&mut transport, &batch, host_tag).await;
                 batch.clear();
             }
         }
@@ -228,7 +240,7 @@ impl Metrics {
         Ok(())
     }
 
-    fn flush(&self, transport: &mut Transport, batch: &[(Metric, u64)], host_tag: &str) {
+    async fn flush(&self, transport: &mut Transport, batch: &[(Metric, u64)], host_tag: &str) {
         match transport {
             /*
              * the UDP receive buffer might be too small on the receiver to accept batched data,
@@ -239,7 +251,7 @@ impl Metrics {
                 for (metric, timestamp_ns) in batch {
                     data.clear();
                     self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
-                    transport.send(&data);
+                    transport.send(&data).await;
                 }
             }
             Transport::Tcp { .. } => {
@@ -247,7 +259,7 @@ impl Metrics {
                 for (metric, timestamp_ns) in batch {
                     self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
                 }
-                transport.send(&data);
+                transport.send(&data).await;
             }
         }
     }
