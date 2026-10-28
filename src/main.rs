@@ -32,7 +32,6 @@ use crate::reflector_selector::ReflectorSelector;
 use crate::settings::{ReflectorDefinition, ReflectorProtocol, Settings};
 use crate::util::RwLockExt;
 use ::log::{info, warn};
-use flume::RecvTimeoutError;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -40,6 +39,8 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch;
 
 struct ReflectorSetup {
     peers: Arc<RwLock<Vec<SocketAddr>>>,
@@ -266,7 +267,7 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
 
 fn spawn_task<F, E>(
     rt: &tokio::runtime::Runtime,
-    error_tx: &flume::Sender<anyhow::Error>,
+    error_tx: &UnboundedSender<anyhow::Error>,
     task: F,
 ) -> tokio::task::JoinHandle<()>
 where
@@ -284,7 +285,7 @@ where
 
 fn spawn_worker<F>(
     name: &str,
-    error_tx: &flume::Sender<anyhow::Error>,
+    error_tx: &UnboundedSender<anyhow::Error>,
     worker: F,
 ) -> anyhow::Result<JoinHandle<()>>
 where
@@ -302,16 +303,16 @@ where
         .map_err(|e| anyhow::anyhow!(e))
 }
 
-fn wait_for_exit(error_rx: &flume::Receiver<anyhow::Error>) -> anyhow::Result<()> {
+async fn wait_for_exit(error_rx: &mut UnboundedReceiver<anyhow::Error>) -> anyhow::Result<()> {
     loop {
-        match error_rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(error) => {
+        match tokio::time::timeout(Duration::from_secs(1), error_rx.recv()).await {
+            Ok(Some(error)) => {
                 return Err(anyhow::anyhow!("worker exited with error: {error}"));
             }
-            Err(RecvTimeoutError::Disconnected) => {
+            Ok(None) => {
                 return Ok(());
             }
-            Err(RecvTimeoutError::Timeout) => {
+            Err(_) => {
                 if SHUTDOWN.load(Ordering::Relaxed) {
                     info!("Received shutdown signal");
                     return Ok(());
@@ -345,20 +346,14 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         reselection_enabled,
     } = setup_reflectors(settings)?;
 
-    let (control_snapshot_tx, control_snapshot_rx) = flume::unbounded();
-    let (error_tx, error_rx) = flume::unbounded::<anyhow::Error>();
-    let (icmp_binding_tx, icmp_binding_rx) = flume::unbounded();
+    let (control_snapshot_tx, control_snapshot_rx) = watch::channel(None);
+    let (error_tx, mut error_rx) = tokio::sync::mpsc::unbounded_channel::<anyhow::Error>();
+    let (icmp_binding_tx, icmp_binding_rx) = watch::channel(Vec::new());
     #[cfg(feature = "irtt")]
-    let (irtt_binding_tx, irtt_binding_rx) = flume::unbounded();
-    let (measurement_tx, measurement_rx) = flume::unbounded();
-    let (reflector_tx, reflector_rx) = flume::unbounded();
-    let (reselect_tx, reselect_rx) = flume::bounded(1);
-    let (selection_snapshot_tx, selection_snapshot_rx) = if reselection_enabled {
-        let (tx, rx) = flume::unbounded();
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
+    let (irtt_binding_tx, irtt_binding_rx) = watch::channel(Vec::new());
+    let (measurement_tx, measurement_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (reflector_tx, reflector_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (reselect_tx, reselect_rx) = tokio::sync::mpsc::channel(1);
 
     let source = match settings.advanced_settings.measurement_type {
         ReflectorProtocol::IcmpEcho => MeasurementSource::IcmpEcho,
@@ -403,7 +398,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     let dropped = Arc::new(AtomicU32::new(0));
 
     let (metrics_tx, metrics_thread_handle) = if settings.observability.enabled {
-        let (tx, rx) = flume::bounded(1000);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1000);
         let metrics = Metrics {
             settings: settings.clone(),
             metrics_rx: rx,
@@ -439,13 +434,12 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         },
     });
 
-    let baseliner = Baseliner {
+    let mut baseliner = Baseliner {
         settings: settings.clone(),
         reselect_trigger: reselect_tx.clone(),
         start_time,
         stats_rx: measurement_rx,
         control_tx: control_snapshot_tx,
-        selection_tx: selection_snapshot_tx,
         baseline_metrics,
         event_metrics: event_metrics.clone(),
         ping_metrics,
@@ -466,8 +460,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     if reselection_enabled {
         let reflector_selector = ReflectorSelector {
             settings: settings.clone(),
-            snapshot_rx: selection_snapshot_rx
-                .expect("reselection snapshot receiver must exist when reselection is enabled"),
+            snapshot_rx: control_snapshot_rx.clone(),
             reflector_peers_lock: Arc::clone(&reflector_peers),
             reflector_pool,
             endpoint_streams,
@@ -475,7 +468,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             metrics: event_metrics,
             reflector_tx,
         };
-        spawn_worker("reselection", &error_tx, move || reflector_selector.run())?;
+        spawn_task(&rt, &error_tx, reflector_selector.run());
     }
 
     // Give the baseliner time to collect initial samples before adjusting rates.
@@ -494,7 +487,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
     // Drop the original sender so the channel disconnects if all workers exit cleanly.
     drop(error_tx);
 
-    let result = wait_for_exit(&error_rx);
+    let result = rt.block_on(wait_for_exit(&mut error_rx));
 
     // Make the error path request shutdown too, rather than leaving the other workers running.
     SHUTDOWN.store(true, Ordering::Relaxed);

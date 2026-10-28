@@ -6,12 +6,14 @@ use crate::measurement::model::MeasurementSource;
 use crate::settings::ObservabilityProtocol;
 use crate::settings::Settings;
 use crate::time::{ClockSample, Realtime};
-use flume::{Receiver, RecvTimeoutError, Sender};
 use log::{error, info, warn};
 use std::fmt::Write;
 use std::net::{IpAddr, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::SyncSender;
 use std::time::Duration;
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;
@@ -127,12 +129,12 @@ pub enum Metric {
 
 #[derive(Clone)]
 pub struct MetricsSender {
-    tx: Option<Sender<(Metric, u64)>>,
+    tx: Option<SyncSender<(Metric, u64)>>,
     dropped: Arc<AtomicU32>,
 }
 
 impl MetricsSender {
-    pub fn new(tx: Sender<(Metric, u64)>, dropped: Arc<AtomicU32>) -> Self {
+    pub fn new(tx: SyncSender<(Metric, u64)>, dropped: Arc<AtomicU32>) -> Self {
         Self {
             tx: Some(tx),
             dropped,
@@ -159,7 +161,7 @@ impl MetricsSender {
 pub struct Metrics {
     pub settings: Settings,
     pub metrics_dropped: Arc<AtomicU32>,
-    pub metrics_rx: Receiver<(Metric, u64)>,
+    pub metrics_rx: mpsc::Receiver<(Metric, u64)>,
 }
 
 impl Metrics {

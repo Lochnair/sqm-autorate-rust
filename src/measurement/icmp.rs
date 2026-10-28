@@ -5,7 +5,6 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use flume::{Receiver, Sender};
 use icmp_socket2::{
     AsyncIcmpSocket, IcmpSocket4, Icmpv4Message, Icmpv4Packet,
     packet::{IcmpPacketBuildError, WithEchoRequest, WithTimestampRequest},
@@ -13,6 +12,7 @@ use icmp_socket2::{
 };
 use log::debug;
 use thiserror::Error;
+use tokio::sync::{mpsc::UnboundedSender, watch};
 
 use crate::{
     measurement::model::{
@@ -24,6 +24,7 @@ use crate::{
     time::{ClockSample, Realtime},
 };
 
+#[derive(Clone)]
 pub struct IcmpBinding {
     pub stream: MeasurementStream,
     pub schedule: ProbeSchedule,
@@ -103,8 +104,8 @@ pub struct IcmpEngine {
 
     origin: Instant,
 
-    binding_rx: Receiver<Vec<IcmpBinding>>,
-    observation_tx: Sender<MeasurementEvent>,
+    binding_rx: watch::Receiver<Vec<IcmpBinding>>,
+    observation_tx: UnboundedSender<MeasurementEvent>,
 }
 
 async fn wait_for_deadline(deadline: Option<Instant>) {
@@ -123,8 +124,8 @@ impl IcmpEngine {
     pub fn new(
         origin: Instant,
         #[allow(unused)] settings: &NetworkSettings,
-        observation_tx: Sender<MeasurementEvent>,
-        binding_rx: Receiver<Vec<IcmpBinding>>,
+        observation_tx: UnboundedSender<MeasurementEvent>,
+        binding_rx: watch::Receiver<Vec<IcmpBinding>>,
     ) -> Result<Self, IcmpError> {
         #[allow(unused_mut)]
         let mut socket = IcmpSocket4::new()?;
@@ -420,12 +421,11 @@ impl IcmpEngine {
 
         for probe in expired {
             self.observation_tx
-                .send_async(MeasurementEvent::Loss(MeasurementLoss {
+                .send(MeasurementEvent::Loss(MeasurementLoss {
                     stream: probe.stream,
                     started_at: probe.sent_at,
                     detected_at: now,
                 }))
-                .await
                 .map_err(|_| IcmpError::EventChannelClosed)?;
         }
 
@@ -446,10 +446,10 @@ impl IcmpEngine {
             let deadline = self.next_deadline();
 
             tokio::select! {
-                bindings = self.binding_rx.recv_async() => {
-                    let bindings = bindings
-                        .map_err(|_| IcmpError::BindingChannelClosed)?;
+                bindings = self.binding_rx.changed() => {
+                    bindings.map_err(|_| IcmpError::BindingChannelClosed)?;
 
+                    let bindings = self.binding_rx.borrow_and_update().clone();
                     self.set_bindings(bindings)?;
                 }
 
@@ -468,8 +468,7 @@ impl IcmpEngine {
                     ) {
                         Ok(observation) => {
                             self.observation_tx
-                                .send_async(MeasurementEvent::Observation(observation))
-                                .await
+                                .send(MeasurementEvent::Observation(observation))
                                 .map_err(|_| IcmpError::EventChannelClosed)?;
                         }
 

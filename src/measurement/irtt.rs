@@ -1,6 +1,5 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use flume::{Receiver, Sender};
 use irtt_client::{
     ClientConfig, ClientEvent, NegotiationPolicy, OpenPolicy,
     managed::{
@@ -12,7 +11,7 @@ use irtt_client::{
 };
 use log::{debug, trace, warn};
 use thiserror::Error;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast::error::RecvError, mpsc::UnboundedSender, watch};
 
 use crate::SHUTDOWN;
 use crate::measurement::model::{
@@ -51,6 +50,7 @@ pub enum IrttError {
     ManagedAbandoned,
 }
 
+#[derive(Clone)]
 pub struct IrttBinding {
     stream: MeasurementStream,
     port: u16,
@@ -69,16 +69,16 @@ pub struct IrttEngine {
     bindings: HashMap<MeasurementStreamId, IrttBinding>,
     targets: Vec<ManagedTargetConfig>,
 
-    binding_rx: Receiver<Vec<IrttBinding>>,
-    observation_tx: Sender<MeasurementEvent>,
+    binding_rx: watch::Receiver<Vec<IrttBinding>>,
+    observation_tx: UnboundedSender<MeasurementEvent>,
 }
 
 impl IrttEngine {
     pub fn new(
         interval: std::time::Duration,
         settings: &NetworkSettings,
-        observation_tx: Sender<MeasurementEvent>,
-        binding_rx: Receiver<Vec<IrttBinding>>,
+        observation_tx: UnboundedSender<MeasurementEvent>,
+        binding_rx: watch::Receiver<Vec<IrttBinding>>,
     ) -> Result<(ManagedClientTask, Self), IrttError> {
         let config = managed_client_config(interval, settings);
         let (task, handle) = ManagedClient::task(config, Vec::new())?;
@@ -158,10 +158,10 @@ impl IrttEngine {
         retry.tick().await;
         loop {
             tokio::select! {
-                bindings = self.binding_rx.recv_async() => {
-                    let bindings = bindings
-                        .map_err(|_| IrttError::BindingChannelClosed)?;
+                bindings = self.binding_rx.changed() => {
+                    bindings.map_err(|_| IrttError::BindingChannelClosed)?;
 
+                    let bindings = self.binding_rx.borrow_and_update().clone();
                     self.set_bindings(bindings).await?;
                 }
 
@@ -273,8 +273,7 @@ impl IrttEngine {
                                     };
 
                                     self.observation_tx
-                                        .send_async(MeasurementEvent::Observation(observation))
-                                        .await
+                                        .send(MeasurementEvent::Observation(observation))
                                         .map_err(|_| IrttError::EventChannelClosed)?;
                                 }
 
@@ -294,8 +293,7 @@ impl IrttEngine {
                                     };
 
                                     self.observation_tx
-                                        .send_async(MeasurementEvent::Loss(loss))
-                                        .await
+                                        .send(MeasurementEvent::Loss(loss))
                                         .map_err(|_| IrttError::EventChannelClosed)?;
                                 }
 

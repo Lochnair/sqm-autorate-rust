@@ -5,8 +5,11 @@ use std::{
     time::Duration,
 };
 
-use flume::{Receiver, SendError, Sender};
 use thiserror::Error;
+use tokio::sync::{
+    mpsc::UnboundedReceiver,
+    watch::{self, error::SendError},
+};
 
 #[cfg(feature = "irtt")]
 use crate::measurement::irtt::IrttBinding;
@@ -28,10 +31,10 @@ pub enum ControllerError {
 }
 
 pub struct Controller {
-    reflector_rx: Receiver<Vec<SocketAddr>>,
-    icmp_binding_tx: Sender<Vec<IcmpBinding>>,
+    reflector_rx: UnboundedReceiver<Vec<SocketAddr>>,
+    icmp_binding_tx: watch::Sender<Vec<IcmpBinding>>,
     #[cfg(feature = "irtt")]
-    irtt_binding_tx: Sender<Vec<IrttBinding>>,
+    irtt_binding_tx: watch::Sender<Vec<IrttBinding>>,
     reflectors: HashMap<SocketAddr, ReflectorDefinition>,
     active_streams: Arc<RwLock<Vec<MeasurementStream>>>,
     endpoint_streams: Arc<RwLock<HashMap<SocketAddr, MeasurementStream>>>,
@@ -47,9 +50,9 @@ impl Controller {
         reason = "Constructor wires the controller channels and shared stream state"
     )]
     pub fn new(
-        reflector_rx: Receiver<Vec<SocketAddr>>,
-        icmp_binding_tx: Sender<Vec<IcmpBinding>>,
-        #[cfg(feature = "irtt")] irtt_binding_tx: Sender<Vec<IrttBinding>>,
+        reflector_rx: UnboundedReceiver<Vec<SocketAddr>>,
+        icmp_binding_tx: watch::Sender<Vec<IcmpBinding>>,
+        #[cfg(feature = "irtt")] irtt_binding_tx: watch::Sender<Vec<IrttBinding>>,
         reflectors: HashMap<SocketAddr, ReflectorDefinition>,
         active_streams: Arc<RwLock<Vec<MeasurementStream>>>,
         endpoint_streams: Arc<RwLock<HashMap<SocketAddr, MeasurementStream>>>,
@@ -73,7 +76,7 @@ impl Controller {
 
     pub async fn run(mut self, initial_reflectors: Vec<SocketAddr>) -> Result<(), ControllerError> {
         self.update_reflectors(initial_reflectors).await?;
-        while let Ok(reflectors) = self.reflector_rx.recv_async().await {
+        while let Some(reflectors) = self.reflector_rx.recv().await {
             self.update_reflectors(reflectors).await?;
         }
         Ok(())
@@ -140,9 +143,9 @@ impl Controller {
             .endpoint_streams
             .write()
             .expect("endpoint stream lock poisoned") = endpoint_streams;
-        self.icmp_binding_tx.send_async(icmp).await?;
+        self.icmp_binding_tx.send(icmp)?;
         #[cfg(feature = "irtt")]
-        self.irtt_binding_tx.send_async(irtt).await?;
+        self.irtt_binding_tx.send(irtt)?;
         Ok(())
     }
 }

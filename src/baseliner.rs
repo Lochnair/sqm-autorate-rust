@@ -9,12 +9,13 @@ use crate::SHUTDOWN;
 use crate::measurement::model::{MeasurementEvent, MeasurementObservation, MeasurementStream};
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
-use flume::{Receiver, Sender};
+use anyhow::Context;
 use log::{debug, info};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 const STALE_AFTER: Duration = Duration::from_secs(30);
 const ANOMALY_THRESHOLD_MS: f64 = 5_000.0;
@@ -70,17 +71,15 @@ impl ReflectorState {
 
 #[derive(Clone, Debug)]
 pub struct ControlSnapshot {
-    pub generated_at: Instant,
     pub reflectors: HashMap<MeasurementStream, ReflectorState>,
 }
 
 pub struct Baseliner {
     pub settings: Settings,
-    pub reselect_trigger: Sender<bool>,
+    pub reselect_trigger: mpsc::Sender<bool>,
     pub start_time: Instant,
-    pub stats_rx: Receiver<MeasurementEvent>,
-    pub control_tx: Sender<ControlSnapshot>,
-    pub selection_tx: Option<Sender<ControlSnapshot>>,
+    pub stats_rx: UnboundedReceiver<MeasurementEvent>,
+    pub control_tx: tokio::sync::watch::Sender<Option<ControlSnapshot>>,
     pub baseline_metrics: MetricsSender,
     pub event_metrics: MetricsSender,
     pub ping_metrics: MetricsSender,
@@ -142,18 +141,14 @@ fn process_reply(
     (*state, anomaly)
 }
 
-fn control_snapshot(
-    reflectors: &HashMap<MeasurementStream, ReflectorState>,
-    generated_at: Instant,
-) -> ControlSnapshot {
+fn control_snapshot(reflectors: &HashMap<MeasurementStream, ReflectorState>) -> ControlSnapshot {
     ControlSnapshot {
-        generated_at,
         reflectors: reflectors.clone(),
     }
 }
 
 impl Baseliner {
-    pub fn run(&self) -> anyhow::Result<()> {
+    pub fn run(&mut self) -> anyhow::Result<()> {
         let mut reflectors = HashMap::<MeasurementStream, ReflectorState>::new();
 
         let slow_factor = ewma_factor(
@@ -171,7 +166,10 @@ impl Baseliner {
                 return Ok(());
             }
 
-            let event = self.stats_rx.recv()?;
+            let event = self
+                .stats_rx
+                .blocking_recv()
+                .context("measurement channel closed")?;
 
             let reply = match event {
                 MeasurementEvent::Observation(reply) => reply,
@@ -232,11 +230,8 @@ impl Baseliner {
                 reflector, state.recent.up, state.recent.down
             );
 
-            let snapshot = control_snapshot(&reflectors, Instant::now());
-            if let Some(selection_tx) = &self.selection_tx {
-                let _ = selection_tx.send(snapshot.clone());
-            }
-            self.control_tx.send(snapshot)?;
+            let snapshot = control_snapshot(&reflectors);
+            self.control_tx.send(Some(snapshot))?;
         }
     }
 }
@@ -453,33 +448,5 @@ mod tests {
         assert_close(updated.recent.up, 200.0);
         assert_eq!(updated.last_receive_at, received_at);
         assert_close(reflectors[&stream].recent.up, 200.0);
-    }
-
-    #[test]
-    fn snapshot_contains_updated_combined_state() {
-        let start = Instant::now();
-        let received_at = start + Duration::from_secs(1);
-        let generated_at = received_at + Duration::from_millis(1);
-        let reflector = "192.0.2.1".parse().unwrap();
-        let mut reflectors = HashMap::new();
-
-        let (updated, anomaly) = process_reply(
-            &mut reflectors,
-            &reply(reflector, 20.0, 30.0, received_at),
-            start,
-            0.9,
-            0.5,
-        );
-        let snapshot = control_snapshot(&reflectors, generated_at);
-        let stream = reply(reflector, 0.0, 0.0, received_at).stream;
-
-        assert!(!anomaly);
-        assert_eq!(snapshot.generated_at, generated_at);
-        assert_close(
-            snapshot.reflectors[&stream].baseline.down,
-            updated.baseline.down,
-        );
-        assert_close(snapshot.reflectors[&stream].recent.up, updated.recent.up);
-        assert_eq!(snapshot.reflectors[&stream].last_receive_at, received_at);
     }
 }
