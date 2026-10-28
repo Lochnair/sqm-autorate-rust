@@ -42,6 +42,10 @@ pub struct Controller {
 }
 
 impl Controller {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Constructor wires the controller channels and shared stream state"
+    )]
     pub fn new(
         reflector_rx: Receiver<Vec<SocketAddr>>,
         icmp_binding_tx: Sender<Vec<IcmpBinding>>,

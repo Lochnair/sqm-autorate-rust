@@ -235,7 +235,7 @@ impl ReflectorSelector {
             }
 
             // Sort the candidates table now by ascending RTT
-            candidates.sort_by(|a, b| a.1.cmp(&b.1));
+            candidates.sort_by_key(|candidate| candidate.1);
 
             // Now we will just limit the candidates down to 2 * num_reflectors
             let num_reflectors = self.settings.reflectors.num_reflectors;

@@ -150,6 +150,10 @@ pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
 }
 
 impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Constructor injects independent runtime and test backends"
+    )]
     fn new_with_backends(
         settings: Settings,
         control_snapshot_rx: Receiver<ControlSnapshot>,
