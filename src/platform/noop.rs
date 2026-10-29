@@ -2,37 +2,24 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::platform::TrafficControlBackend;
+use crate::platform::Platform;
 use log::debug;
 use std::convert::Infallible;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NoopShaper {
-    interface: String,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct NoopTrafficControl;
-
-impl TrafficControlBackend for NoopTrafficControl {
-    type Error = Infallible;
-    type Handle = NoopShaper;
-
-    fn find_shaper(&mut self, interface: &str) -> Result<Self::Handle, Self::Error> {
-        Ok(NoopShaper {
-            interface: interface.to_string(),
-        })
+impl Platform {
+    pub(crate) fn validate_shaper(&self, _interface: &str) -> Result<(), Infallible> {
+        Ok(())
     }
 
-    fn set_rate(
-        &mut self,
-        shaper: &Self::Handle,
+    pub(crate) fn set_rate(
+        &self,
+        interface: &str,
         bandwidth_kbit: u64,
         dry_run: bool,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), Infallible> {
         debug!(
             "Ignoring traffic-control rate request of {} kbit/s for interface {} (dry_run={})",
-            bandwidth_kbit, shaper.interface, dry_run
+            bandwidth_kbit, interface, dry_run
         );
         Ok(())
     }

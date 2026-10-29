@@ -10,8 +10,7 @@ use std::ptr;
 use log::warn;
 use thiserror::Error;
 
-use super::noop::NoopTrafficControl;
-use crate::platform::{InterfaceStats, InterfaceStatsProvider};
+use crate::platform::InterfaceStats;
 
 const ROUTE_MESSAGE_PREFIX_LEN: usize = size_of::<libc::c_ushort>() + 2;
 const SYSCTL_FETCH_ATTEMPTS: usize = 3;
@@ -43,12 +42,13 @@ pub(crate) enum MacOsInterfaceStatsError {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct MacOsInterfaceStats;
+pub(crate) struct Platform {}
 
-impl InterfaceStatsProvider for MacOsInterfaceStats {
-    type Error = MacOsInterfaceStatsError;
-
-    fn read_stats(&mut self, interface: &str) -> Result<InterfaceStats, Self::Error> {
+impl Platform {
+    pub(crate) fn read_stats(
+        &self,
+        interface: &str,
+    ) -> Result<InterfaceStats, MacOsInterfaceStatsError> {
         let interface_name =
             CString::new(interface).map_err(MacOsInterfaceStatsError::InterfaceNameContainsNul)?;
         // SAFETY: `interface_name` is a live, NUL-terminated C string for the duration of the call.
@@ -198,17 +198,6 @@ fn parse_route_messages(
     Err(MacOsInterfaceStatsError::NoInterfaceStats {
         interface_index: requested_interface_index,
     })
-}
-
-pub(crate) type PlatformInterfaceStats = MacOsInterfaceStats;
-pub(crate) type PlatformTrafficControl = NoopTrafficControl;
-
-pub(crate) fn interface_stats_provider() -> PlatformInterfaceStats {
-    MacOsInterfaceStats
-}
-
-pub(crate) fn traffic_control_backend() -> PlatformTrafficControl {
-    NoopTrafficControl
 }
 
 pub(crate) fn warn_platform_limitations() {

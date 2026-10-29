@@ -9,8 +9,7 @@ use std::ptr;
 
 use log::warn;
 
-use super::noop::NoopTrafficControl;
-use crate::platform::{InterfaceStats, InterfaceStatsProvider};
+use crate::platform::InterfaceStats;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum FreeBsdInterfaceStatsError {
@@ -43,12 +42,13 @@ pub(crate) enum FreeBsdInterfaceStatsError {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct FreeBsdInterfaceStats;
+pub(crate) struct Platform {}
 
-impl InterfaceStatsProvider for FreeBsdInterfaceStats {
-    type Error = FreeBsdInterfaceStatsError;
-
-    fn read_stats(&mut self, interface: &str) -> Result<InterfaceStats, Self::Error> {
+impl Platform {
+    pub(crate) fn read_stats(
+        &self,
+        interface: &str,
+    ) -> Result<InterfaceStats, FreeBsdInterfaceStatsError> {
         let interface_name = CString::new(interface)
             .map_err(FreeBsdInterfaceStatsError::InterfaceNameContainsNul)?;
         let interface_index = unsafe { libc::if_nametoindex(interface_name.as_ptr()) };
@@ -105,17 +105,6 @@ impl InterfaceStatsProvider for FreeBsdInterfaceStats {
             tx_bytes: ifmd.ifmd_data.ifi_obytes,
         })
     }
-}
-
-pub(crate) type PlatformInterfaceStats = FreeBsdInterfaceStats;
-pub(crate) type PlatformTrafficControl = NoopTrafficControl;
-
-pub(crate) fn interface_stats_provider() -> PlatformInterfaceStats {
-    FreeBsdInterfaceStats
-}
-
-pub(crate) fn traffic_control_backend() -> PlatformTrafficControl {
-    NoopTrafficControl
 }
 
 pub(crate) fn warn_platform_limitations() {

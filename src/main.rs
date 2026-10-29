@@ -26,7 +26,7 @@ use crate::measurement::icmp::IcmpEngine;
 use crate::measurement::irtt::IrttEngine;
 use crate::measurement::model::{MeasurementSource, MeasurementStream};
 use crate::metrics::{Metric, Metrics, MetricsSender};
-use crate::platform::{TrafficControlBackend, traffic_control_backend, warn_platform_limitations};
+use crate::platform::{Platform, warn_platform_limitations};
 use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
 use crate::settings::{ReflectorDefinition, ReflectorProtocol, Settings};
@@ -58,20 +58,9 @@ extern "C" fn signal_handler(_: libc::c_int) {
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn initialize_shaper<T: TrafficControlBackend>(
-    settings: &Settings,
-    traffic_control: &mut T,
-) -> anyhow::Result<(T::Handle, T::Handle)> {
-    initialize_shaper_with_settle_time(settings, traffic_control, Duration::from_secs(2))
-}
-
-fn initialize_shaper_with_settle_time<T: TrafficControlBackend>(
-    settings: &Settings,
-    traffic_control: &mut T,
-    settle_time: Duration,
-) -> anyhow::Result<(T::Handle, T::Handle)> {
-    let down = traffic_control.find_shaper(&settings.network.download_interface)?;
-    let up = traffic_control.find_shaper(&settings.network.upload_interface)?;
+fn initialize_shaper(settings: &Settings, platform: &Platform) -> anyhow::Result<()> {
+    platform.validate_shaper(&settings.network.download_interface)?;
+    platform.validate_shaper(&settings.network.upload_interface)?;
 
     info!(
         "Requesting minimum shaper rates (D/U): {} / {}",
@@ -79,25 +68,22 @@ fn initialize_shaper_with_settle_time<T: TrafficControlBackend>(
         settings.network.upload_min_kbits(),
     );
 
-    traffic_control.set_rate(
-        &down,
+    platform.set_rate(
+        &settings.network.download_interface,
         settings.network.download_min_kbits() as u64,
         settings.advanced_settings.dry_run,
     )?;
-    traffic_control.set_rate(
-        &up,
+    platform.set_rate(
+        &settings.network.upload_interface,
         settings.network.upload_min_kbits() as u64,
         settings.advanced_settings.dry_run,
     )?;
 
-    info!(
-        "Sleeping for {} seconds to give the shaper a chance to control existing bloat",
-        settle_time.as_secs_f64(),
-    );
+    info!("Sleeping for 2 seconds to give the shaper a chance to control existing bloat");
 
-    sleep(settle_time);
+    sleep(Duration::from_secs(2));
 
-    Ok((down, up))
+    Ok(())
 }
 
 fn install_signal_handlers() {
@@ -113,27 +99,22 @@ fn install_signal_handlers() {
     }
 }
 
-fn restore_shaper<T: TrafficControlBackend>(
-    settings: &Settings,
-    traffic_control: &mut T,
-    down: &T::Handle,
-    up: &T::Handle,
-) {
+fn restore_shaper(settings: &Settings, platform: &Platform) {
     info!(
         "Requesting restoration to base shaper rates (D/U): {} / {}",
         settings.network.download_base_kbits, settings.network.upload_base_kbits,
     );
 
-    if let Err(error) = traffic_control.set_rate(
-        down,
+    if let Err(error) = platform.set_rate(
+        &settings.network.download_interface,
         settings.network.download_base_kbits as u64,
         settings.advanced_settings.dry_run,
     ) {
         warn!("Failed to restore download shaper rate: {error}");
     }
 
-    if let Err(error) = traffic_control.set_rate(
-        up,
+    if let Err(error) = platform.set_rate(
+        &settings.network.upload_interface,
         settings.network.upload_base_kbits as u64,
         settings.advanced_settings.dry_run,
     ) {
@@ -445,8 +426,8 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         ping_metrics,
     };
 
-    let mut main_traffic_control = traffic_control_backend();
-    let (down_shaper, up_shaper) = initialize_shaper(settings, &mut main_traffic_control)?;
+    let platform = Arc::new(Platform::default());
+    initialize_shaper(settings, &platform)?;
 
     spawn_worker("baseliner", &error_tx, move || baseliner.run())?;
     spawn_task(
@@ -480,6 +461,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         active_streams,
         reselect_tx,
         rate_metrics,
+        Arc::clone(&platform),
     )?;
 
     spawn_worker("ratecontroller", &error_tx, move || ratecontroller.run())?;
@@ -509,12 +491,7 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         let _ = rt.block_on(handle);
     }
 
-    restore_shaper(
-        settings,
-        &mut main_traffic_control,
-        &down_shaper,
-        &up_shaper,
-    );
+    restore_shaper(settings, &platform);
 
     result
 }

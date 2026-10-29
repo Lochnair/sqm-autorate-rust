@@ -9,16 +9,14 @@ use crate::SHUTDOWN;
 use crate::baseliner::ControlSnapshot;
 use crate::measurement::model::MeasurementStream;
 use crate::metrics::{Metric, MetricsSender};
-use crate::platform::{
-    InterfaceStatsProvider, PlatformInterfaceStats, PlatformTrafficControl, TrafficControlBackend,
-    interface_stats_provider, traffic_control_backend,
-};
+use crate::platform::Platform;
 use crate::settings::Settings;
 use crate::time::{ClockSample, Realtime};
 use crate::util::{ArcRwLock, RwLockExt};
 use log::{debug, info, warn};
 use std::fs::File;
 use std::io::Write;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -40,22 +38,21 @@ fn generate_initial_speeds(rng: &mut fastrand::Rng, base_speed: f64, size: u32) 
     rates
 }
 
-fn get_interface_stats<S: InterfaceStatsProvider>(
-    stats_provider: &mut S,
+fn get_interface_stats(
+    platform: &Platform,
     upload_interface: &str,
-) -> Result<(i128, i128), S::Error> {
-    let stats = stats_provider.read_stats(upload_interface)?;
+) -> anyhow::Result<(i128, i128)> {
+    let stats = platform.read_stats(upload_interface)?;
 
     Ok((stats.rx_bytes.into(), stats.tx_bytes.into()))
 }
 
 #[derive(Clone, Debug)]
-struct State<H> {
+struct State {
     current_bytes: i128,
     current_rate: f64,
     delta_stat: f64,
     deltas: Vec<f64>,
-    shaper: H,
     load: f64,
     next_rate: f64,
     nrate: usize,
@@ -65,8 +62,8 @@ struct State<H> {
     utilisation: f64,
 }
 
-impl<H> State<H> {
-    fn new(shaper: H, previous_bytes: i128, safe_rates: Vec<f64>) -> Self {
+impl State {
+    fn new(previous_bytes: i128, safe_rates: Vec<f64>) -> Self {
         State {
             current_bytes: 0,
             current_rate: 0.0,
@@ -75,7 +72,6 @@ impl<H> State<H> {
             load: 0.0,
             next_rate: 0.0,
             nrate: 0,
-            shaper,
             previous_bytes,
             prev_t: Instant::now(),
             safe_rates,
@@ -121,61 +117,52 @@ fn deltas_from_snapshot(
     (down, up)
 }
 
-pub struct Ratecontroller<S: InterfaceStatsProvider, T: TrafficControlBackend> {
+pub struct Ratecontroller {
     settings: Settings,
     control_snapshot_rx: tokio::sync::watch::Receiver<Option<ControlSnapshot>>,
     reflectors_lock: ArcRwLock<Vec<MeasurementStream>>,
     reselect_trigger: mpsc::Sender<bool>,
-    state_dl: State<T::Handle>,
-    state_ul: State<T::Handle>,
+    state_dl: State,
+    state_ul: State,
     rng: fastrand::Rng,
-    stats_provider: S,
-    traffic_control: T,
+    platform: Arc<Platform>,
     metrics: MetricsSender,
 }
 
-impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Constructor injects independent runtime and test backends"
-    )]
-    fn new_with_backends(
+impl Ratecontroller {
+    pub fn new(
         settings: Settings,
         control_snapshot_rx: tokio::sync::watch::Receiver<Option<ControlSnapshot>>,
         reflectors_lock: ArcRwLock<Vec<MeasurementStream>>,
         reselect_trigger: mpsc::Sender<bool>,
         metrics: MetricsSender,
-        mut stats_provider: S,
-        mut traffic_control: T,
-        mut rng: fastrand::Rng,
+        platform: Arc<Platform>,
     ) -> anyhow::Result<Self> {
-        let dl_shaper =
-            traffic_control.find_shaper(settings.network.download_interface.as_str())?;
+        platform.validate_shaper(&settings.network.download_interface)?;
+        platform.validate_shaper(&settings.network.upload_interface)?;
+        let mut rng = fastrand::Rng::new();
         let dl_safe_rates = generate_initial_speeds(
             &mut rng,
             settings.network.download_base_kbits,
             settings.advanced_settings.speed_hist_size,
         );
-        let ul_shaper = traffic_control.find_shaper(settings.network.upload_interface.as_str())?;
         let ul_safe_rates = generate_initial_speeds(
             &mut rng,
             settings.network.upload_base_kbits,
             settings.advanced_settings.speed_hist_size,
         );
 
-        let (cur_rx, cur_tx) =
-            get_interface_stats(&mut stats_provider, &settings.network.upload_interface)?;
+        let (cur_rx, cur_tx) = get_interface_stats(&platform, &settings.network.upload_interface)?;
 
         Ok(Self {
             settings,
             control_snapshot_rx,
             reflectors_lock,
             reselect_trigger,
-            state_dl: State::new(dl_shaper, cur_rx, dl_safe_rates),
-            state_ul: State::new(ul_shaper, cur_tx, ul_safe_rates),
+            state_dl: State::new(cur_rx, dl_safe_rates),
+            state_ul: State::new(cur_tx, ul_safe_rates),
             rng,
-            stats_provider,
-            traffic_control,
+            platform,
             metrics,
         })
     }
@@ -185,13 +172,13 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         self.state_dl.current_rate = self.settings.network.download_base_kbits * 0.6;
         self.state_ul.current_rate = self.settings.network.upload_base_kbits * 0.6;
 
-        self.traffic_control.set_rate(
-            &self.state_dl.shaper,
+        self.platform.set_rate(
+            &self.settings.network.download_interface,
             self.state_dl.current_rate.round() as u64,
             self.settings.advanced_settings.dry_run,
         )?;
-        self.traffic_control.set_rate(
-            &self.state_ul.shaper,
+        self.platform.set_rate(
+            &self.settings.network.upload_interface,
             self.state_ul.current_rate.round() as u64,
             self.settings.advanced_settings.dry_run,
         )?;
@@ -332,10 +319,8 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 // if it's been long enough, and the stats indicate needing to change speeds
                 // change speeds here
 
-                (self.state_dl.current_bytes, self.state_ul.current_bytes) = get_interface_stats(
-                    &mut self.stats_provider,
-                    &self.settings.network.upload_interface,
-                )?;
+                (self.state_dl.current_bytes, self.state_ul.current_bytes) =
+                    get_interface_stats(&self.platform, &self.settings.network.upload_interface)?;
                 self.update_deltas()?;
 
                 if self.state_dl.deltas.is_empty() || self.state_ul.deltas.is_empty() {
@@ -349,13 +334,13 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                     self.state_dl.next_rate = self.settings.network.download_min_kbits();
                     self.state_ul.next_rate = self.settings.network.upload_min_kbits();
 
-                    self.traffic_control.set_rate(
-                        &self.state_dl.shaper,
+                    self.platform.set_rate(
+                        &self.settings.network.download_interface,
                         self.state_dl.next_rate as u64,
                         self.settings.advanced_settings.dry_run,
                     )?;
-                    self.traffic_control.set_rate(
-                        &self.state_ul.shaper,
+                    self.platform.set_rate(
+                        &self.settings.network.upload_interface,
                         self.state_ul.next_rate as u64,
                         self.settings.advanced_settings.dry_run,
                     )?;
@@ -378,16 +363,16 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
                 }
 
                 if self.state_dl.next_rate != self.state_dl.current_rate {
-                    self.traffic_control.set_rate(
-                        &self.state_dl.shaper,
+                    self.platform.set_rate(
+                        &self.settings.network.download_interface,
                         self.state_dl.next_rate as u64,
                         self.settings.advanced_settings.dry_run,
                     )?;
                 }
 
                 if self.state_ul.next_rate != self.state_ul.current_rate {
-                    self.traffic_control.set_rate(
-                        &self.state_ul.shaper,
+                    self.platform.set_rate(
+                        &self.settings.network.upload_interface,
                         self.state_ul.next_rate as u64,
                         self.settings.advanced_settings.dry_run,
                     )?;
@@ -497,26 +482,5 @@ impl<S: InterfaceStatsProvider, T: TrafficControlBackend> Ratecontroller<S, T> {
         }
 
         Ok(())
-    }
-}
-
-impl Ratecontroller<PlatformInterfaceStats, PlatformTrafficControl> {
-    pub fn new(
-        settings: Settings,
-        control_snapshot_rx: tokio::sync::watch::Receiver<Option<ControlSnapshot>>,
-        reflectors_lock: ArcRwLock<Vec<MeasurementStream>>,
-        reselect_trigger: mpsc::Sender<bool>,
-        metrics: MetricsSender,
-    ) -> anyhow::Result<Self> {
-        Self::new_with_backends(
-            settings,
-            control_snapshot_rx,
-            reflectors_lock,
-            reselect_trigger,
-            metrics,
-            interface_stats_provider(),
-            traffic_control_backend(),
-            fastrand::Rng::new(),
-        )
     }
 }

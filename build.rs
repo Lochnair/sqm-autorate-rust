@@ -17,9 +17,10 @@ fn main() {
         "macos" => println!(
             "cargo::warning=traffic control is unavailable on macOS; requested rate changes will be calculated but not applied"
         ),
-        _ => println!(
-            "cargo::warning=target `{target}` has no native interface-statistics or traffic-control backend; synthetic interface load will be used and requested rate changes will not be applied"
+        "freebsd" => println!(
+            "cargo::warning=traffic control is unavailable on FreeBSD; requested rate changes will be calculated but not applied"
         ),
+        _ => {}
     }
 
     println!("cargo::rerun-if-changed=build.rs");
