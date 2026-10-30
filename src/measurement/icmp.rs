@@ -432,7 +432,7 @@ impl IcmpEngine {
         Ok(())
     }
 
-    pub async fn run(mut self) -> Result<(), IcmpError> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         const HOUSEKEEPING_INTERVAL: Duration = Duration::from_millis(500);
 
         let mut housekeeping = tokio::time::interval_at(
@@ -480,7 +480,7 @@ impl IcmpEngine {
                             // Not ours, malformed, or late.
                         }
 
-                        Err(err) => return Err(err),
+                       Err(err) => return Err(err.into())
                     }
                 }
 

@@ -74,7 +74,7 @@ impl Controller {
         }
     }
 
-    pub async fn run(mut self, initial_reflectors: Vec<SocketAddr>) -> Result<(), ControllerError> {
+    pub async fn run(mut self, initial_reflectors: Vec<SocketAddr>) -> anyhow::Result<()> {
         self.update_reflectors(initial_reflectors).await?;
         while let Some(reflectors) = self.reflector_rx.recv().await {
             self.update_reflectors(reflectors).await?;

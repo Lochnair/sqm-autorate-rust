@@ -5,15 +5,13 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::SHUTDOWN;
-use crate::baseliner::ControlSnapshot;
+use crate::law::ControlSnapshot;
 use crate::measurement::model::MeasurementStream;
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
 use crate::util::RwLockExt;
 use log::{debug, info};
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -53,11 +51,6 @@ impl ReflectorSelector {
         tokio::time::sleep(baseline_sleep_time).await;
 
         loop {
-            if SHUTDOWN.load(Ordering::Relaxed) {
-                info!("Reflector selector shutting down");
-                return Ok(());
-            }
-
             let triggered = tokio::select! {
                 trigger = self.trigger_channel.recv() => {
                     match trigger {
