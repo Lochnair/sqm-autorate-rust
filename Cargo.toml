@@ -20,6 +20,7 @@ strip = "symbols"
 
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1.92"
 config = { version = "0.15.27", default-features = false }
 csv = "1.4.0"
 fastrand = "2"
