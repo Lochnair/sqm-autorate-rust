@@ -308,6 +308,7 @@ impl SqmaLaw {
                 continue;
             };
 
+            let load = traffic_kbps / state.current_kbps;
             let next = state.calculate_rate(
                 shaper,
                 traffic_kbps,
@@ -321,6 +322,13 @@ impl SqmaLaw {
                 ctx.set_rate(direction, next)?;
                 state.current_kbps = next;
             }
+
+            ctx.metrics.send(Metric::Rate {
+                direction,
+                rate_kbps: state.current_kbps,
+                load,
+                delta_delay: deltas[deltas.len() / 2],
+            });
         }
 
         if let Some(diagnostics) = &mut self.diagnostics {

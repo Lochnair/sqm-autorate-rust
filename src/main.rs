@@ -293,20 +293,12 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         None
     };
 
-    let make_sender = |enabled: bool| -> MetricsSender {
-        metrics_tx
-            .as_ref()
-            .filter(|_| enabled)
-            .map(|tx| MetricsSender::new(tx.clone(), Arc::clone(&dropped)))
-            .unwrap_or_else(MetricsSender::disabled)
-    };
+    let metrics = metrics_tx
+        .as_ref()
+        .map(|tx| MetricsSender::new(tx.clone(), Arc::clone(&dropped), &settings.observability))
+        .unwrap_or_else(MetricsSender::disabled);
 
-    let ping_metrics = make_sender(settings.observability.export_ping_metrics);
-    let baseline_metrics = make_sender(settings.observability.export_baseline_metrics);
-    let event_metrics = make_sender(settings.observability.export_events);
-    let rate_metrics = make_sender(settings.observability.export_rate_metrics);
-
-    event_metrics.send(Metric::Event {
+    metrics.send(Metric::Event {
         name: "starting",
         reason: "",
         reflector: None,
@@ -328,7 +320,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
     ));
     let law_ctx = LawContext::new(
         measurement_rx,
-        rate_metrics,
+        metrics.clone(),
         reselect_tx,
         Arc::clone(&runtime),
         Arc::clone(&active_streams),
@@ -338,7 +330,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
 
     workers.spawn(controller.run(reflector_peers.read_anyhow()?.clone()));
 
-    let main_event_metrics = event_metrics.clone();
+    let main_event_metrics = metrics.clone();
 
     if reselection_enabled {
         let reflector_selector = ReflectorSelector {
@@ -348,7 +340,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             reflector_pool,
             endpoint_streams,
             trigger_channel: reselect_rx,
-            metrics: event_metrics,
+            metrics,
             reflector_tx,
         };
         workers.spawn(reflector_selector.run());
