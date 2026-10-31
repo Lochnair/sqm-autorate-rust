@@ -7,39 +7,37 @@
 
 extern crate core;
 
-mod baseliner;
 mod controller;
+mod diagnostics;
+mod law;
 mod log;
 mod measurement;
 mod metrics;
 mod platform;
-mod ratecontroller;
 mod reflector_selector;
+mod runtime;
 mod settings;
 mod time;
 mod util;
 
-use crate::baseliner::Baseliner;
 use crate::controller::Controller;
+use crate::law::{Law, LawContext, SqmaLaw};
 use crate::measurement::icmp::IcmpEngine;
 #[cfg(feature = "irtt")]
 use crate::measurement::irtt::IrttEngine;
 use crate::measurement::model::{MeasurementSource, MeasurementStream};
 use crate::metrics::{Metric, Metrics, MetricsSender};
 use crate::platform::{Platform, warn_platform_limitations};
-use crate::ratecontroller::Ratecontroller;
 use crate::reflector_selector::ReflectorSelector;
+use crate::runtime::Runtime;
 use crate::settings::{ReflectorDefinition, ReflectorProtocol, Settings};
 use crate::util::RwLockExt;
 use ::log::{info, warn};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, RwLock};
-use std::thread;
-use std::thread::{JoinHandle, sleep};
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 
 struct ReflectorSetup {
@@ -50,15 +48,10 @@ struct ReflectorSetup {
     reflectors: HashMap<SocketAddr, ReflectorDefinition>,
     reselection_enabled: bool,
 }
-pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn signal_handler(_: libc::c_int) {
-    SHUTDOWN.store(true, Ordering::Relaxed);
-}
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn initialize_shaper(settings: &Settings, platform: &Platform) -> anyhow::Result<()> {
+async fn initialize_shaper(settings: &Settings, platform: &Platform) -> anyhow::Result<()> {
     platform.validate_shaper(&settings.network.download_interface)?;
     platform.validate_shaper(&settings.network.upload_interface)?;
 
@@ -81,45 +74,9 @@ fn initialize_shaper(settings: &Settings, platform: &Platform) -> anyhow::Result
 
     info!("Sleeping for 2 seconds to give the shaper a chance to control existing bloat");
 
-    sleep(Duration::from_secs(2));
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     Ok(())
-}
-
-fn install_signal_handlers() {
-    unsafe {
-        libc::signal(
-            libc::SIGINT,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGTERM,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-    }
-}
-
-fn restore_shaper(settings: &Settings, platform: &Platform) {
-    info!(
-        "Requesting restoration to base shaper rates (D/U): {} / {}",
-        settings.network.download_base_kbits, settings.network.upload_base_kbits,
-    );
-
-    if let Err(error) = platform.set_rate(
-        &settings.network.download_interface,
-        settings.network.download_base_kbits as u64,
-        settings.advanced_settings.dry_run,
-    ) {
-        warn!("Failed to restore download shaper rate: {error}");
-    }
-
-    if let Err(error) = platform.set_rate(
-        &settings.network.upload_interface,
-        settings.network.upload_base_kbits as u64,
-        settings.advanced_settings.dry_run,
-    ) {
-        warn!("Failed to restore upload shaper rate: {error}");
-    }
 }
 
 fn resolve_reflectors(
@@ -246,71 +203,15 @@ fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorSetup> {
     })
 }
 
-fn spawn_task<F, E>(
-    rt: &tokio::runtime::Runtime,
-    error_tx: &UnboundedSender<anyhow::Error>,
-    task: F,
-) -> tokio::task::JoinHandle<()>
-where
-    F: Future<Output = Result<(), E>> + Send + 'static,
-    E: Into<anyhow::Error> + Send + 'static,
-{
-    let error_tx = error_tx.clone();
+async fn run(settings: Settings) -> anyhow::Result<()> {
+    let mut workers = tokio::task::JoinSet::<anyhow::Result<()>>::new();
 
-    rt.spawn(async move {
-        if let Err(error) = task.await {
-            let _ = error_tx.send(error.into());
-        }
-    })
-}
-
-fn spawn_worker<F>(
-    name: &str,
-    error_tx: &UnboundedSender<anyhow::Error>,
-    worker: F,
-) -> anyhow::Result<JoinHandle<()>>
-where
-    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
-{
-    let error_tx = error_tx.clone();
-
-    thread::Builder::new()
-        .name(name.to_owned())
-        .spawn(move || {
-            if let Err(error) = worker() {
-                let _ = error_tx.send(error);
-            }
-        })
-        .map_err(|e| anyhow::anyhow!(e))
-}
-
-async fn wait_for_exit(error_rx: &mut UnboundedReceiver<anyhow::Error>) -> anyhow::Result<()> {
-    loop {
-        match tokio::time::timeout(Duration::from_secs(1), error_rx.recv()).await {
-            Ok(Some(error)) => {
-                return Err(anyhow::anyhow!("worker exited with error: {error}"));
-            }
-            Ok(None) => {
-                return Ok(());
-            }
-            Err(_) => {
-                if SHUTDOWN.load(Ordering::Relaxed) {
-                    info!("Received shutdown signal");
-                    return Ok(());
-                }
-            }
-        }
-    }
-}
-
-fn run(settings: &Settings) -> anyhow::Result<()> {
     #[cfg(not(feature = "irtt"))]
     if settings.advanced_settings.measurement_type == ReflectorProtocol::Irtt {
         anyhow::bail!(
             "IRTT measurement selected, but this binary was built without the `irtt` feature"
         );
     }
-    let rt = tokio::runtime::Runtime::new()?;
 
     if settings.advanced_settings.dry_run {
         info!("*** MONITORING MODE ACTIVE — qdisc rates will NOT be changed ***");
@@ -325,16 +226,22 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         pool: reflector_pool,
         reflectors,
         reselection_enabled,
-    } = setup_reflectors(settings)?;
+    } = setup_reflectors(&settings)?;
 
     let (control_snapshot_tx, control_snapshot_rx) = watch::channel(None);
-    let (error_tx, mut error_rx) = tokio::sync::mpsc::unbounded_channel::<anyhow::Error>();
     let (icmp_binding_tx, icmp_binding_rx) = watch::channel(Vec::new());
     #[cfg(feature = "irtt")]
     let (irtt_binding_tx, irtt_binding_rx) = watch::channel(Vec::new());
     let (measurement_tx, measurement_rx) = tokio::sync::mpsc::unbounded_channel();
     let (reflector_tx, reflector_rx) = tokio::sync::mpsc::unbounded_channel();
     let (reselect_tx, reselect_rx) = tokio::sync::mpsc::channel(1);
+    let (traffic_tx, traffic_rx) = watch::channel(None);
+
+    let platform = Arc::new(Platform::default());
+    initialize_shaper(&settings, &platform).await?;
+
+    let runtime = Arc::new(Runtime::new(platform, settings.clone(), traffic_tx));
+    workers.spawn(runtime.clone().run());
 
     let source = match settings.advanced_settings.measurement_type {
         ReflectorProtocol::IcmpEcho => MeasurementSource::IcmpEcho,
@@ -352,59 +259,46 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         source,
         Duration::from_secs_f64(settings.advanced_settings.tick_interval),
     );
-    let icmp_engine = {
-        let _guard = rt.enter();
-        IcmpEngine::new(
-            start_time,
-            &settings.network,
-            measurement_tx.clone(),
-            icmp_binding_rx,
-        )?
-    };
+    let icmp_engine = IcmpEngine::new(
+        start_time,
+        &settings.network,
+        measurement_tx.clone(),
+        icmp_binding_rx,
+    )?;
     #[cfg(feature = "irtt")]
-    let (irtt_task, irtt_engine) = {
-        let _guard = rt.enter();
-        IrttEngine::new(
-            Duration::from_secs_f64(settings.advanced_settings.tick_interval),
-            &settings.network,
-            measurement_tx,
-            irtt_binding_rx,
-        )?
-    };
+    let (irtt_task, irtt_engine) = IrttEngine::new(
+        Duration::from_secs_f64(settings.advanced_settings.tick_interval),
+        &settings.network,
+        measurement_tx,
+        irtt_binding_rx,
+    )?;
 
-    spawn_task(&rt, &error_tx, icmp_engine.run());
+    workers.spawn(icmp_engine.run());
+
     #[cfg(feature = "irtt")]
-    spawn_task(&rt, &error_tx, irtt_engine.run(irtt_task));
+    workers.spawn(irtt_engine.run(irtt_task));
 
     let dropped = Arc::new(AtomicU32::new(0));
 
-    let (metrics_tx, metrics_thread_handle) = if settings.observability.enabled {
+    let metrics_tx = if settings.observability.enabled {
         let (tx, rx) = tokio::sync::mpsc::channel(1000);
         let metrics = Metrics {
             settings: settings.clone(),
             metrics_rx: rx,
             metrics_dropped: Arc::clone(&dropped),
         };
-        let handle = spawn_task(&rt, &error_tx, metrics.run());
-        (Some(tx), Some(handle))
+        workers.spawn(metrics.run());
+        Some(tx)
     } else {
-        (None, None)
+        None
     };
 
-    let make_sender = |enabled: bool| -> MetricsSender {
-        metrics_tx
-            .as_ref()
-            .filter(|_| enabled)
-            .map(|tx| MetricsSender::new(tx.clone(), Arc::clone(&dropped)))
-            .unwrap_or_else(MetricsSender::disabled)
-    };
+    let metrics = metrics_tx
+        .as_ref()
+        .map(|tx| MetricsSender::new(tx.clone(), Arc::clone(&dropped), &settings.observability))
+        .unwrap_or_else(MetricsSender::disabled);
 
-    let ping_metrics = make_sender(settings.observability.export_ping_metrics);
-    let baseline_metrics = make_sender(settings.observability.export_baseline_metrics);
-    let event_metrics = make_sender(settings.observability.export_events);
-    let rate_metrics = make_sender(settings.observability.export_rate_metrics);
-
-    event_metrics.send(Metric::Event {
+    metrics.send(Metric::Event {
         name: "starting",
         reason: "",
         reflector: None,
@@ -415,28 +309,28 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         },
     });
 
-    let mut baseliner = Baseliner {
-        settings: settings.clone(),
-        reselect_trigger: reselect_tx.clone(),
-        start_time,
-        stats_rx: measurement_rx,
-        control_tx: control_snapshot_tx,
-        baseline_metrics,
-        event_metrics: event_metrics.clone(),
-        ping_metrics,
-    };
-
-    let platform = Arc::new(Platform::default());
-    initialize_shaper(settings, &platform)?;
-
-    spawn_worker("baseliner", &error_tx, move || baseliner.run())?;
-    spawn_task(
-        &rt,
-        &error_tx,
-        controller.run(reflector_peers.read_anyhow()?.clone()),
+    let diagnostics = diagnostics::CsvWriter::new(&settings.output).map(|(sender, writer)| {
+        workers.spawn(writer.run());
+        sender
+    });
+    let law = Box::new(SqmaLaw::new(
+        settings.clone(),
+        control_snapshot_tx,
+        diagnostics,
+    ));
+    let law_ctx = LawContext::new(
+        measurement_rx,
+        metrics.clone(),
+        reselect_tx,
+        Arc::clone(&runtime),
+        Arc::clone(&active_streams),
+        traffic_rx,
     );
+    workers.spawn(law.run(law_ctx));
 
-    let main_event_metrics = event_metrics.clone();
+    workers.spawn(controller.run(reflector_peers.read_anyhow()?.clone()));
+
+    let main_event_metrics = metrics.clone();
 
     if reselection_enabled {
         let reflector_selector = ReflectorSelector {
@@ -446,33 +340,28 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
             reflector_pool,
             endpoint_streams,
             trigger_channel: reselect_rx,
-            metrics: event_metrics,
+            metrics,
             reflector_tx,
         };
-        spawn_task(&rt, &error_tx, reflector_selector.run());
+        workers.spawn(reflector_selector.run());
     }
 
-    // Give the baseliner time to collect initial samples before adjusting rates.
-    sleep(Duration::from_secs(10));
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
-    let mut ratecontroller = Ratecontroller::new(
-        settings.clone(),
-        control_snapshot_rx,
-        active_streams,
-        reselect_tx,
-        rate_metrics,
-        Arc::clone(&platform),
-    )?;
+    let result: anyhow::Result<()> = tokio::select! {
+        signal = tokio::signal::ctrl_c() => signal.map_err(Into::into),
 
-    spawn_worker("ratecontroller", &error_tx, move || ratecontroller.run())?;
+        _ = sigterm.recv() => Ok(()),
 
-    // Drop the original sender so the channel disconnects if all workers exit cleanly.
-    drop(error_tx);
-
-    let result = rt.block_on(wait_for_exit(&mut error_rx));
-
-    // Make the error path request shutdown too, rather than leaving the other workers running.
-    SHUTDOWN.store(true, Ordering::Relaxed);
+        completed = workers.join_next() => match completed {
+            Some(Ok(Err(error))) => Err(error),
+            Some(Ok(Ok(()))) => {
+                Err(anyhow::anyhow!("Worker exited unexpectedly"))
+            }
+            Some(Err(error)) => Err(error.into()),
+            None => Err(anyhow::anyhow!("No workers remaining")),
+        },
+    };
 
     let stopping_reason = if result.is_err() { "error" } else { "signal" };
     main_event_metrics.send(Metric::Event {
@@ -482,24 +371,21 @@ fn run(settings: &Settings) -> anyhow::Result<()> {
         tags: &[],
     });
 
+    workers.shutdown().await;
+
     // Drop all MetricsSender instances and the raw tx so the metrics channel
     // disconnects once all worker threads also drop their copies.
     drop(main_event_metrics);
     drop(metrics_tx);
 
-    if let Some(handle) = metrics_thread_handle {
-        let _ = rt.block_on(handle);
-    }
-
-    restore_shaper(settings, &platform);
+    runtime.restore_shaper()?;
 
     result
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     println!("Starting sqm-autorate-rust version {}", VERSION);
-
-    install_signal_handlers();
 
     let settings = Settings::load()?;
     settings.validate()?;
@@ -507,5 +393,5 @@ fn main() -> anyhow::Result<()> {
     log::init(settings.output.log_level)?;
     warn_platform_limitations();
 
-    run(&settings)
+    run(settings).await
 }

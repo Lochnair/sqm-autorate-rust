@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use anyhow::anyhow;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-pub type ArcRwLock<T> = Arc<RwLock<T>>;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub trait RwLockExt<T> {
     fn read_anyhow(&self) -> anyhow::Result<RwLockReadGuard<'_, T>>;

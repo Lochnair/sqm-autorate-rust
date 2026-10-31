@@ -13,7 +13,6 @@ use log::{debug, trace, warn};
 use thiserror::Error;
 use tokio::sync::{broadcast::error::RecvError, mpsc::UnboundedSender, watch};
 
-use crate::SHUTDOWN;
 use crate::measurement::model::{
     MeasurementEvent, MeasurementLoss, MeasurementObservation, MeasurementStream,
     MeasurementStreamId, OneWayClock, OneWayLatency, SignedDuration,
@@ -123,7 +122,7 @@ impl IrttEngine {
         Ok(())
     }
 
-    pub async fn run(mut self, task: ManagedClientTask) -> Result<(), IrttError> {
+    pub async fn run(mut self, task: ManagedClientTask) -> anyhow::Result<()> {
         let mut task = Box::pin(task);
         let client = self.client.clone();
 
@@ -133,7 +132,7 @@ impl IrttEngine {
             outcome = task.as_mut() => {
                 return match outcome.end_reason {
                     ManagedEndReason::StopRequested => Ok(()),
-                    end_reason => Err(IrttError::ManagedFailure(end_reason)),
+                    end_reason => Err(IrttError::ManagedFailure(end_reason).into()),
                 };
             }
             result = self.run_events() => result,
@@ -145,7 +144,7 @@ impl IrttEngine {
         result?;
         match outcome.end_reason {
             ManagedEndReason::StopRequested => Ok(()),
-            end_reason => Err(IrttError::ManagedFailure(end_reason)),
+            end_reason => Err(IrttError::ManagedFailure(end_reason).into()),
         }
     }
 
@@ -166,9 +165,6 @@ impl IrttEngine {
                 }
 
                 _ = retry.tick() => {
-                    if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Ok(());
-                    }
                     if self.client.status().targets.iter().any(|target| {
                         target.desired && target.lifecycle == ManagedTargetLifecycle::Terminal
                     }) {
@@ -359,12 +355,6 @@ impl IrttEngine {
                         ManagedEvent::Abandoned => {
                             return Err(IrttError::ManagedAbandoned);
                         }
-                    }
-                }
-
-                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                    if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Ok(());
                     }
                 }
             }

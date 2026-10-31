@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::measurement::model::MeasurementSource;
-use crate::settings::ObservabilityProtocol;
+use crate::runtime::Direction;
 use crate::settings::Settings;
+use crate::settings::{ObservabilityProtocol, ObservabilitySettings};
 use crate::time::{ClockSample, Realtime};
 use log::{error, info, warn};
 use std::fmt::Write;
@@ -109,12 +110,10 @@ pub enum Metric {
         down_time: f64,
     },
     Rate {
-        dl_rate: f64,
-        ul_rate: f64,
-        rx_load: f64,
-        tx_load: f64,
-        delta_delay_down: f64,
-        delta_delay_up: f64,
+        direction: Direction,
+        rate_kbps: f64,
+        load: f64,
+        delta_delay: f64,
     },
     Baseline {
         reflector: IpAddr,
@@ -138,13 +137,25 @@ pub enum Metric {
 pub struct MetricsSender {
     tx: Option<mpsc::Sender<(Metric, u64)>>,
     dropped: Arc<AtomicU32>,
+    export_ping_metrics: bool,
+    export_baseline_metrics: bool,
+    export_rate_metrics: bool,
+    export_events: bool,
 }
 
 impl MetricsSender {
-    pub fn new(tx: mpsc::Sender<(Metric, u64)>, dropped: Arc<AtomicU32>) -> Self {
+    pub fn new(
+        tx: mpsc::Sender<(Metric, u64)>,
+        dropped: Arc<AtomicU32>,
+        settings: &ObservabilitySettings,
+    ) -> Self {
         Self {
             tx: Some(tx),
             dropped,
+            export_ping_metrics: settings.export_ping_metrics,
+            export_baseline_metrics: settings.export_baseline_metrics,
+            export_rate_metrics: settings.export_rate_metrics,
+            export_events: settings.export_events,
         }
     }
 
@@ -152,10 +163,25 @@ impl MetricsSender {
         Self {
             tx: None,
             dropped: Arc::new(AtomicU32::new(0)),
+            export_ping_metrics: false,
+            export_baseline_metrics: false,
+            export_rate_metrics: false,
+            export_events: false,
         }
     }
 
     pub fn send(&self, metric: Metric) {
+        let enabled = match &metric {
+            Metric::Ping { .. } => self.export_ping_metrics,
+            Metric::Baseline { .. } => self.export_baseline_metrics,
+            Metric::Rate { .. } => self.export_rate_metrics,
+            Metric::Event { .. } => self.export_events,
+            Metric::Dropped { .. } => true,
+        };
+        if !enabled {
+            return;
+        }
+
         if let Some(ref tx) = self.tx {
             let ts = ClockSample::<Realtime>::now().as_nanos();
             if tx.try_send((metric, ts)).is_err() {
@@ -281,20 +307,18 @@ impl Metrics {
                 .unwrap_or(());
             }
             Metric::Rate {
-                dl_rate,
-                ul_rate,
-                rx_load,
-                tx_load,
-                delta_delay_down,
-                delta_delay_up,
+                direction,
+                rate_kbps,
+                load,
+                delta_delay,
             } => {
+                let direction = match direction {
+                    Direction::Download => "download",
+                    Direction::Upload => "upload",
+                };
                 writeln!(out,
-                    "sqm_rate,host={host_tag},direction=download \
-                    rate_kbps={dl_rate:.0},load={rx_load:.4},delta_delay={delta_delay_down:.3} {timestamp_ns}i"
-                ).unwrap_or(());
-                writeln!(out,
-                    "sqm_rate,host={host_tag},direction=upload \
-                    rate_kbps={ul_rate:.0},load={tx_load:.4},delta_delay={delta_delay_up:.3} {timestamp_ns}i"
+                    "sqm_rate,host={host_tag},direction={direction} \
+                    rate_kbps={rate_kbps:.0},load={load:.4},delta_delay={delta_delay:.3} {timestamp_ns}i"
                 ).unwrap_or(());
             }
             Metric::Baseline {
