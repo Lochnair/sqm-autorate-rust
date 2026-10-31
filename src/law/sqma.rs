@@ -106,8 +106,6 @@ pub(crate) struct SqmaLaw {
 #[async_trait::async_trait]
 impl Law for SqmaLaw {
     async fn run(mut self: Box<Self>, mut ctx: LawContext) -> anyhow::Result<()> {
-        self.initialize(&ctx)?;
-
         let interval = Duration::from_secs_f64(self.settings.advanced_settings.min_change_interval);
 
         let mut ticker = tokio::time::interval_at(
@@ -117,6 +115,8 @@ impl Law for SqmaLaw {
 
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+        let mut initialized = false;
+
         loop {
             tokio::select! {
                 event = ctx.measurements.recv() => {
@@ -125,7 +125,12 @@ impl Law for SqmaLaw {
                 }
 
                 _ = ticker.tick() => {
-                    self.evaluate(&mut ctx)?;
+                    if !initialized {
+                        self.initialize(&ctx)?;
+                        initialized = true;
+                    } else {
+                        self.evaluate(&mut ctx)?;
+                    }
 
                     self.reflectors.retain(|_, state| {
                         Instant::now().saturating_duration_since(state.last_receive_at) <= STALE_AFTER
