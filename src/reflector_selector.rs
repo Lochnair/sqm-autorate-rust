@@ -25,7 +25,9 @@ fn recent_rtt_for_peer(
 ) -> Option<u64> {
     snapshot
         .and_then(|snapshot| stream.and_then(|stream| snapshot.reflectors.get(stream)))
-        .filter(|state| now.saturating_duration_since(state.last_receive_at) < max_age)
+        .filter(|state| {
+            state.valid && now.saturating_duration_since(state.last_receive_at) < max_age
+        })
         .map(|state| (state.recent.down + state.recent.up) as u64)
 }
 

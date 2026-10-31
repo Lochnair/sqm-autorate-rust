@@ -201,7 +201,7 @@ impl SqmaLaw {
                 continue;
             };
 
-            if now.saturating_duration_since(state.last_receive_at) >= max_age {
+            if !state.valid || now.saturating_duration_since(state.last_receive_at) >= max_age {
                 continue;
             }
 
@@ -389,7 +389,6 @@ impl SqmaLaw {
         };
 
         if anomaly {
-            self.reflectors.remove(&observation.stream);
             ctx.metrics.send(Metric::Event {
                 name: "reselection",
                 reason: "anomaly",
@@ -465,7 +464,10 @@ impl EwmaStats {
 pub struct ReflectorState {
     pub baseline: EwmaStats,
     pub recent: EwmaStats,
+    /// Last response, including rejected measurements.
     pub last_receive_at: Instant,
+    /// Whether the retained EWMAs are usable after the latest response.
+    pub valid: bool,
 }
 
 impl ReflectorState {
@@ -474,6 +476,7 @@ impl ReflectorState {
             baseline: sample,
             recent: sample,
             last_receive_at: received_at,
+            valid: true,
         }
     }
 
@@ -491,10 +494,12 @@ impl ReflectorState {
         if received_at.saturating_duration_since(self.last_receive_at) > STALE_AFTER {
             self.reset(sample, received_at);
         }
+        self.last_receive_at = received_at;
 
         if sample.up > self.baseline.up + ANOMALY_THRESHOLD_MS
             || sample.down > self.baseline.down + ANOMALY_THRESHOLD_MS
         {
+            self.valid = false;
             return true;
         }
 
@@ -503,7 +508,7 @@ impl ReflectorState {
 
         self.baseline.down = self.baseline.down.min(self.recent.down);
         self.baseline.up = self.baseline.up.min(self.recent.up);
-        self.last_receive_at = received_at;
+        self.valid = true;
 
         false
     }
