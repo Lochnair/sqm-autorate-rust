@@ -27,8 +27,8 @@ pub(crate) struct Shaper {
 
 #[derive(Clone, Copy, Debug)]
 pub struct TrafficRates {
-    pub sampled_at: Instant,
-    pub generation: u16,
+    pub _sampled_at: Instant,
+    pub _generation: u16,
     pub rx_kbps: f64,
     pub tx_kbps: f64,
 }
@@ -145,8 +145,8 @@ impl Runtime {
         const KBITS_PER_BYTE: f64 = 8.0 / 1_000.0;
 
         let rates = TrafficRates {
-            sampled_at: now,
-            generation: *generation,
+            _sampled_at: now,
+            _generation: *generation,
             rx_kbps: (stats.rx_bytes - last_stats.rx_bytes) as f64 * KBITS_PER_BYTE / elapsed,
             tx_kbps: (stats.tx_bytes - last_stats.tx_bytes) as f64 * KBITS_PER_BYTE / elapsed,
         };
