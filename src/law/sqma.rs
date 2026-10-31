@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::Context;
@@ -8,6 +8,7 @@ use log::{debug, warn};
 use tokio::sync::watch;
 
 use crate::{
+    diagnostics::{DiagnosticRecord, DiagnosticsSender, DirectionStatistics, SpeedHistory},
     law::{Law, LawContext},
     measurement::model::{MeasurementEvent, MeasurementObservation, MeasurementStream},
     metrics::Metric,
@@ -95,6 +96,7 @@ pub(crate) struct SqmaLaw {
     slow_factor: f64,
 
     rng: fastrand::Rng,
+    diagnostics: Option<DiagnosticsSender>,
 
     // TODO: Eventually the selector should do its own calculations,
     // and not depend on the law for measurements
@@ -135,7 +137,11 @@ impl Law for SqmaLaw {
 }
 
 impl SqmaLaw {
-    pub fn new(settings: Settings, control_tx: watch::Sender<Option<ControlSnapshot>>) -> Self {
+    pub fn new(
+        settings: Settings,
+        control_tx: watch::Sender<Option<ControlSnapshot>>,
+        diagnostics: Option<DiagnosticsSender>,
+    ) -> Self {
         let tick = settings.advanced_settings.tick_interval;
 
         Self {
@@ -147,6 +153,7 @@ impl SqmaLaw {
             slow_factor: (0.5_f64.ln() / (BASELINE_HALF_LIFE_SECS / tick)).exp(),
             rng: fastrand::Rng::new(),
             control_tx,
+            diagnostics,
         }
     }
 
@@ -267,6 +274,20 @@ impl SqmaLaw {
             return Ok(());
         };
 
+        // Load uses the rate in effect during the traffic sample, before this evaluation.
+        let (down_load, up_load) = if self.diagnostics.is_some() {
+            (
+                self.download
+                    .as_ref()
+                    .map(|s| traffic.rx_kbps / s.current_kbps),
+                self.upload
+                    .as_ref()
+                    .map(|s| traffic.tx_kbps / s.current_kbps),
+            )
+        } else {
+            (None, None)
+        };
+
         for (direction, state, deltas, traffic_kbps, delay_ms) in [
             (
                 Direction::Download,
@@ -300,6 +321,32 @@ impl SqmaLaw {
                 ctx.set_rate(direction, next)?;
                 state.current_kbps = next;
             }
+        }
+
+        if let Some(diagnostics) = &mut self.diagnostics {
+            diagnostics.publish(now, |history_due| DiagnosticRecord {
+                time: SystemTime::now(),
+                download: self.download.as_ref().map(|s| DirectionStatistics {
+                    load: down_load.unwrap(),
+                    delta_ms: down_deltas[down_deltas.len() / 2],
+                    rate_kbps: s.current_kbps,
+                }),
+                upload: self.upload.as_ref().map(|s| DirectionStatistics {
+                    load: up_load.unwrap(),
+                    delta_ms: up_deltas[up_deltas.len() / 2],
+                    rate_kbps: s.current_kbps,
+                }),
+                history: history_due.then(|| SpeedHistory {
+                    download: self
+                        .download
+                        .as_ref()
+                        .map(|s| s.safe_rates.iter().copied().collect()),
+                    upload: self
+                        .upload
+                        .as_ref()
+                        .map(|s| s.safe_rates.iter().copied().collect()),
+                }),
+            });
         }
 
         Ok(())

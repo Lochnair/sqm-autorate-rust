@@ -8,6 +8,7 @@
 extern crate core;
 
 mod controller;
+mod diagnostics;
 mod law;
 mod log;
 mod measurement;
@@ -316,7 +317,15 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         },
     });
 
-    let law = Box::new(SqmaLaw::new(settings.clone(), control_snapshot_tx));
+    let diagnostics = diagnostics::CsvWriter::new(&settings.output).map(|(sender, writer)| {
+        workers.spawn(writer.run());
+        sender
+    });
+    let law = Box::new(SqmaLaw::new(
+        settings.clone(),
+        control_snapshot_tx,
+        diagnostics,
+    ));
     let law_ctx = LawContext::new(
         measurement_rx,
         rate_metrics,
