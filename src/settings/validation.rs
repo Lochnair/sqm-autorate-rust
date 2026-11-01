@@ -109,29 +109,40 @@ impl NetworkSettings {
             report.error("network.upload_interface", "must not be empty");
         }
 
-        let download_base_valid = validate_greater_than_zero_f64(
-            report,
-            "network.download_base_kbits",
-            self.download_base_kbits,
-        );
+        if self.traffic_interface().is_none() {
+            report.error(
+                "network",
+                "at least one shaping interface must be configured (both are none)",
+            );
+        }
 
-        let upload_base_valid = validate_greater_than_zero_f64(
-            report,
-            "network.upload_base_kbits",
-            self.upload_base_kbits,
-        );
+        let download_base_valid = self.download_interface().is_some()
+            && validate_greater_than_zero_f64(
+                report,
+                "network.download_base_kbits",
+                self.download_base_kbits,
+            );
 
-        let download_percent_valid = validate_percent(
-            report,
-            "network.download_min_percent",
-            self.download_min_percent,
-        );
+        let upload_base_valid = self.upload_interface().is_some()
+            && validate_greater_than_zero_f64(
+                report,
+                "network.upload_base_kbits",
+                self.upload_base_kbits,
+            );
 
-        let upload_percent_valid = validate_percent(
-            report,
-            "network.upload_min_percent",
-            self.upload_min_percent,
-        );
+        let download_percent_valid = self.download_interface().is_some()
+            && validate_percent(
+                report,
+                "network.download_min_percent",
+                self.download_min_percent,
+            );
+
+        let upload_percent_valid = self.upload_interface().is_some()
+            && validate_percent(
+                report,
+                "network.upload_min_percent",
+                self.upload_min_percent,
+            );
 
         if download_percent_valid && self.download_min_percent > WARN_HIGH_MIN_PERCENT {
             report.warning(

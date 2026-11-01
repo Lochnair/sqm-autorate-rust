@@ -50,26 +50,34 @@ impl Runtime {
         platform: Arc<Platform>,
         settings: Settings,
         traffic_tx: watch::Sender<Option<TrafficRates>>,
-    ) -> Self {
-        Runtime {
+    ) -> anyhow::Result<Self> {
+        let traffic_interface = settings
+            .network
+            .traffic_interface()
+            .ok_or_else(|| anyhow::anyhow!("At least one shaping interface must be configured"))?
+            .to_owned();
+        Ok(Runtime {
             platform,
-            traffic_interface: settings.network.upload_interface.clone(),
+            traffic_interface,
             sample_interval: Duration::from_secs_f64(settings.advanced_settings.tick_interval),
             traffic_tx,
-            download: Some(Shaper {
-                interface: settings.network.download_interface.clone(),
-                base_kbps: settings.network.download_base_kbits,
-                min_kbps: settings.network.download_min_kbits(),
-                max_kbps: None,
-            }),
-            upload: Some(Shaper {
-                interface: settings.network.upload_interface.clone(),
+            download: settings
+                .network
+                .download_interface()
+                .map(|interface| Shaper {
+                    interface: interface.to_owned(),
+                    base_kbps: settings.network.download_base_kbits,
+                    min_kbps: settings.network.download_min_kbits(),
+                    max_kbps: None,
+                }),
+            upload: settings.network.upload_interface().map(|interface| Shaper {
+                interface: interface.to_owned(),
                 base_kbps: settings.network.upload_base_kbits,
                 min_kbps: settings.network.upload_min_kbits(),
                 max_kbps: None,
             }),
             dry_run: settings.advanced_settings.dry_run,
-        }
+        })
     }
 
     pub(super) async fn run(self: Arc<Self>) -> anyhow::Result<()> {
@@ -144,6 +152,11 @@ impl Runtime {
         }
 
         let elapsed = now.duration_since(last_at).as_secs_f64();
+
+        if elapsed <= 0.0 {
+            self.traffic_tx.send_replace(None);
+            return;
+        }
 
         const KBITS_PER_BYTE: f64 = 8.0 / 1_000.0;
 

@@ -241,9 +241,11 @@ impl Settings {
 pub(crate) struct NetworkSettings {
     pub(crate) download_interface: String,
     pub(crate) upload_interface: String,
+    #[serde(default)]
     pub(crate) download_base_kbits: f64,
     #[serde(default = "default_min_percent")]
     pub(crate) download_min_percent: f64,
+    #[serde(default)]
     pub(crate) upload_base_kbits: f64,
     #[serde(default = "default_min_percent")]
     pub(crate) upload_min_percent: f64,
@@ -257,6 +259,21 @@ pub(crate) struct NetworkSettings {
 }
 
 impl NetworkSettings {
+    // Keep interface strings in the configuration schema; reserve `none` in both
+    // TOML and UCI, which does not reliably preserve empty string options.
+    pub(crate) fn download_interface(&self) -> Option<&str> {
+        (self.download_interface != "none").then_some(self.download_interface.as_str())
+    }
+
+    pub(crate) fn upload_interface(&self) -> Option<&str> {
+        (self.upload_interface != "none").then_some(self.upload_interface.as_str())
+    }
+
+    pub(crate) fn traffic_interface(&self) -> Option<&str> {
+        self.upload_interface()
+            .or_else(|| self.download_interface())
+    }
+
     pub(crate) fn download_min_kbits(&self) -> f64 {
         (self.download_base_kbits * self.download_min_percent / 100.0).floor()
     }

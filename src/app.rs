@@ -91,10 +91,17 @@ impl App {
         let (traffic_tx, traffic_rx) = watch::channel(None);
 
         let platform = Arc::new(Platform::default());
-        platform.validate_shaper(&settings.network.download_interface)?;
-        platform.validate_shaper(&settings.network.upload_interface)?;
+        for interface in [
+            settings.network.download_interface(),
+            settings.network.upload_interface(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            platform.validate_shaper(interface)?;
+        }
 
-        let runtime = Arc::new(Runtime::new(platform, settings.clone(), traffic_tx));
+        let runtime = Arc::new(Runtime::new(platform, settings.clone(), traffic_tx)?);
 
         let source = match settings.advanced_settings.measurement_type {
             ReflectorProtocol::IcmpEcho => MeasurementSource::IcmpEcho,
@@ -219,7 +226,10 @@ impl App {
             result = async {
                 restore_required = true;
                 for direction in [Direction::Download, Direction::Upload] {
-                    let rate = runtime.shaper(direction).expect("configured shaper").min_kbps;
+                    let Some(shaper) = runtime.shaper(direction) else {
+                        continue;
+                    };
+                    let rate = shaper.min_kbps;
                     info!("Requesting minimum {direction:?} shaper rate: {rate}");
                     runtime
                         .set_rate(direction, rate)
