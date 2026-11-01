@@ -118,18 +118,25 @@ pub(crate) fn setup_reflectors(settings: &Settings) -> anyhow::Result<ReflectorS
     if reflectors.is_empty() {
         anyhow::bail!("no usable reflectors for measurement protocol {protocol}");
     }
-    let mut pool = configured.keys().copied().collect::<Vec<_>>();
+    let mut pool = reflectors.keys().copied().collect::<Vec<_>>();
     pool.sort();
-    let mut initial = bootstrap.keys().copied().collect::<Vec<_>>();
-    initial.sort();
-    if initial.is_empty() {
-        initial = pool
-            .iter()
-            .take(settings.reflectors.num_reflectors as usize)
+    let num_reflectors = settings.reflectors.num_reflectors as usize;
+    let reselection_enabled = pool.len() > num_reflectors;
+    let initial = if reselection_enabled {
+        // Bootstrap priority applies only to initialization. All endpoints remain
+        // in the sorted pool for subsequent selection.
+        pool.iter()
+            .filter(|endpoint| bootstrap.contains_key(endpoint))
+            .chain(
+                pool.iter()
+                    .filter(|endpoint| !bootstrap.contains_key(endpoint)),
+            )
+            .take(num_reflectors)
             .copied()
-            .collect();
-    }
-    let reselection_enabled = pool.len() > settings.reflectors.num_reflectors as usize;
+            .collect()
+    } else {
+        pool.clone()
+    };
 
     Ok(ReflectorSetup {
         initial,
