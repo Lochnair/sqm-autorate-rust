@@ -54,46 +54,56 @@ impl DiagnosticsSender {
 }
 
 pub(crate) struct CsvWriter {
-    output: OutputSettings,
+    history: File,
+    stats: File,
     rx: mpsc::Receiver<DiagnosticRecord>,
 }
 
 impl CsvWriter {
-    pub fn new(output: &OutputSettings) -> Option<(DiagnosticsSender, Self)> {
+    pub async fn new(output: &OutputSettings) -> anyhow::Result<Option<(DiagnosticsSender, Self)>> {
         if output.suppress_statistics {
-            return None;
+            return Ok(None);
         }
+        let history = create(&output.speed_hist_file, HISTORY_HEADER).await?;
+        let stats = create(&output.stats_file, STATS_HEADER).await?;
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
-        Some((
+        Ok(Some((
             DiagnosticsSender {
                 tx,
                 last_history: Instant::now(),
             },
-            Self {
-                output: output.clone(),
-                rx,
-            },
-        ))
+            Self { history, stats, rx },
+        )))
     }
 
     pub async fn run(mut self) -> anyhow::Result<()> {
-        let mut history = create(&self.output.speed_hist_file, HISTORY_HEADER).await?;
-        let mut stats = create(&self.output.stats_file, STATS_HEADER).await?;
+        // A successful write must not reset the throttle for intermittent failures.
+        let mut last_stats_warning: Option<Instant> = None;
         while let Some(record) = self.rx.recv().await {
-            if let Err(error) = stats.write_all(format_statistics(&record).as_bytes()).await {
-                log::warn!("Failed to write statistics: {error}");
+            if let Err(error) = self
+                .stats
+                .write_all(format_statistics(&record).as_bytes())
+                .await
+                && last_stats_warning.is_none_or(|last| last.elapsed() >= Duration::from_secs(60))
+            {
+                log::warn!("Failed to write CSV statistics: {error}");
+                last_stats_warning = Some(Instant::now());
             }
             if let Some(snapshot) = &record.history
-                && let Err(error) = history
+                && let Err(error) = self
+                    .history
                     .write_all(format_history(record.time, snapshot).as_bytes())
                     .await
             {
-                log::warn!("Failed to write speed history file: {error}");
+                log::warn!("Failed to write CSV speed history: {error}");
             }
         }
-        // Normal application shutdown still follows the existing worker-abort policy.
-        stats.flush().await?;
-        history.flush().await?;
+        if let Err(error) = self.stats.flush().await {
+            log::warn!("Failed to flush CSV statistics: {error}");
+        }
+        if let Err(error) = self.history.flush().await {
+            log::warn!("Failed to flush CSV speed history: {error}");
+        }
         Ok(())
     }
 }

@@ -7,7 +7,7 @@ use crate::runtime::Direction;
 use crate::settings::Settings;
 use crate::settings::{ObservabilityProtocol, ObservabilitySettings};
 use crate::time::{ClockSample, Realtime};
-use log::{error, info, warn};
+use log::{info, warn};
 use std::fmt::Write;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -192,81 +192,103 @@ impl MetricsSender {
 }
 
 pub struct Metrics {
-    pub settings: Settings,
-    pub metrics_dropped: Arc<AtomicU32>,
-    pub metrics_rx: mpsc::Receiver<(Metric, u64)>,
+    settings: Settings,
+    metrics_dropped: Arc<AtomicU32>,
+    metrics_rx: mpsc::Receiver<(Metric, u64)>,
+    transport: Transport,
 }
 
 impl Metrics {
-    pub async fn run(mut self) -> anyhow::Result<()> {
-        let host = match &self.settings.observability.host {
-            Some(h) => h.clone(),
-            None => {
-                error!("Observability host not configured - metrics exporter disabled");
-                return Ok(());
-            }
-        };
-
-        let port = self.settings.observability.port;
-        let batch_size = self.settings.observability.batch_size;
-        let timeout = Duration::from_millis(self.settings.observability.batch_timeout_ms);
-        let host_tag = &self.settings.observability.host_tag.clone();
-
-        let mut transport = match self.settings.observability.protocol {
+    pub async fn new(
+        settings: Settings,
+        metrics_rx: mpsc::Receiver<(Metric, u64)>,
+        metrics_dropped: Arc<AtomicU32>,
+    ) -> anyhow::Result<Self> {
+        let host = settings
+            .observability
+            .host
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Observability host not configured"))?;
+        let port = settings.observability.port;
+        let transport = match settings.observability.protocol {
             ObservabilityProtocol::Udp => {
                 info!("Metrics exporter configured for UDP to {}:{}", host, port);
-                Transport::new_udp(&host, port).await?
+                Transport::new_udp(host, port).await?
             }
             ObservabilityProtocol::Tcp => {
                 info!("Metrics exporter configured for TCP to {}:{}", host, port);
-                Transport::new_tcp(&host, port)
+                Transport::new_tcp(host, port)
             }
         };
+        Ok(Self {
+            settings,
+            metrics_rx,
+            metrics_dropped,
+            transport,
+        })
+    }
 
+    pub async fn run(mut self) -> anyhow::Result<()> {
+        let batch_size = self.settings.observability.batch_size;
+        let timeout = Duration::from_millis(self.settings.observability.batch_timeout_ms);
+        let host_tag = self.settings.observability.host_tag.clone();
         let mut batch = Vec::with_capacity(batch_size);
 
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
         loop {
-            // block until first metric or timeout
             tokio::select! {
+                // A steady stream must not postpone the current batch deadline.
+                biased;
+                _ = &mut deadline => {
+                    self.collect_dropped(&mut batch);
+                    if !batch.is_empty() {
+                        Self::flush(&mut self.transport, &batch, &host_tag).await;
+                        batch.clear();
+                    }
+                    deadline.as_mut().reset(tokio::time::Instant::now() + timeout);
+                    continue;
+                }
                 metric = self.metrics_rx.recv() => {
                     match metric {
                         Some(metric) => batch.push(metric),
                         None => break,
                     }
                 }
-
-                _ = tokio::time::sleep(timeout) => {
-                    let dropped = self.metrics_dropped.swap(0, Ordering::Relaxed);
-                    if dropped > 0 {
-                        let ts = ClockSample::<Realtime>::now().as_nanos();
-                        batch.push((Metric::Dropped { count: dropped }, ts));
-                    }
-                    if !batch.is_empty() {
-                        self.flush(&mut transport, &batch, host_tag).await;
-                        batch.clear();
-                    }
-                    continue;
-                }
             }
 
-            // greedily drain without blocking
-            while let Ok(metric) = self.metrics_rx.try_recv() {
-                batch.push(metric);
-                if batch.len() >= batch_size {
-                    break;
+            // Drain only up to the batch limit; do not starve the deadline.
+            while batch.len() < batch_size {
+                match self.metrics_rx.try_recv() {
+                    Ok(metric) => batch.push(metric),
+                    Err(_) => break,
                 }
             }
-
             if batch.len() >= batch_size {
-                self.flush(&mut transport, &batch, host_tag).await;
+                Self::flush(&mut self.transport, &batch, &host_tag).await;
                 batch.clear();
+                deadline
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + timeout);
             }
         }
 
+        self.collect_dropped(&mut batch);
+        if !batch.is_empty() {
+            Self::flush(&mut self.transport, &batch, &host_tag).await;
+        }
         Ok(())
     }
 
-    async fn flush(&self, transport: &mut Transport, batch: &[(Metric, u64)], host_tag: &str) {
+    fn collect_dropped(&self, batch: &mut Vec<(Metric, u64)>) {
+        let dropped = self.metrics_dropped.swap(0, Ordering::Relaxed);
+        if dropped > 0 {
+            let ts = ClockSample::<Realtime>::now().as_nanos();
+            batch.push((Metric::Dropped { count: dropped }, ts));
+        }
+    }
+
+    async fn flush(transport: &mut Transport, batch: &[(Metric, u64)], host_tag: &str) {
         match transport {
             /*
              * the UDP receive buffer might be too small on the receiver to accept batched data,
@@ -276,21 +298,21 @@ impl Metrics {
                 let mut data = String::with_capacity(300);
                 for (metric, timestamp_ns) in batch {
                     data.clear();
-                    self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
+                    Self::write_lines(metric, *timestamp_ns, host_tag, &mut data);
                     transport.send(&data).await;
                 }
             }
             Transport::Tcp { .. } => {
                 let mut data = String::with_capacity(batch.len() * 300);
                 for (metric, timestamp_ns) in batch {
-                    self.write_lines(metric, *timestamp_ns, host_tag, &mut data);
+                    Self::write_lines(metric, *timestamp_ns, host_tag, &mut data);
                 }
                 transport.send(&data).await;
             }
         }
     }
 
-    fn write_lines(&self, metric: &Metric, timestamp_ns: u64, host_tag: &str, out: &mut String) {
+    fn write_lines(metric: &Metric, timestamp_ns: u64, host_tag: &str, out: &mut String) {
         match metric {
             Metric::Ping {
                 reflector,

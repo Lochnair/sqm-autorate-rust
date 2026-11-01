@@ -95,6 +95,7 @@ impl Runtime {
     }
 
     pub fn restore_shaper(&self) -> anyhow::Result<()> {
+        let mut failures = Vec::new();
         for direction in [Direction::Download, Direction::Upload] {
             let Some(shaper) = self.shaper(direction) else {
                 continue;
@@ -102,9 +103,11 @@ impl Runtime {
 
             if let Err(e) = self.set_rate(direction, shaper.base_kbps) {
                 error!("Unable to restore shaper for {direction:?}: {e:?}");
+                failures.push(format!("{direction:?}: {e:#}"));
             }
         }
 
+        anyhow::ensure!(failures.is_empty(), "{}", failures.join("; "));
         Ok(())
     }
 
