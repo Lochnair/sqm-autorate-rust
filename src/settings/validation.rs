@@ -216,10 +216,10 @@ impl ReflectorSettings {
             report.error("reflectors.peer_reselection_time", "must be greater than 0");
         }
 
-        if self.files.is_empty() && self.entries.is_empty() {
+        if self.files.is_empty() && self.entries.is_empty() && self.bootstrap.is_empty() {
             report.error(
                 "reflectors",
-                "at least one reflector file or inline entry is required",
+                "at least one reflector file, inline entry, or bootstrap entry is required",
             );
         }
 
