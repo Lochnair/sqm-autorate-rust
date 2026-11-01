@@ -54,7 +54,7 @@ impl ValidationReport {
         for issue in self.issues {
             match issue.severity {
                 ValidationSeverity::Warning => {
-                    eprintln!("warning: {}: {}", issue.path, issue.message);
+                    crate::log::message(format_args!("warning: {}: {}", issue.path, issue.message));
                 }
 
                 ValidationSeverity::Error => {

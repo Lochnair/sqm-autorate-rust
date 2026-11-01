@@ -25,17 +25,33 @@ mod util;
 use crate::app::App;
 use crate::platform::warn_platform_limitations;
 use crate::settings::Settings;
+use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    println!("Starting sqm-autorate-rust version {}", VERSION);
+async fn main() -> anyhow::Result<ExitCode> {
+    // Initialization errors return before any shaper can be modified.
+    log::init()?;
+    log::message(format_args!(
+        "Starting sqm-autorate-rust version {}",
+        VERSION
+    ));
 
-    let settings = Settings::load()?;
+    let result = async {
+        let settings = Settings::load()?;
+        ::log::set_max_level(settings.output.log_level.to_level_filter());
+        warn_platform_limitations();
 
-    log::init(settings.output.log_level)?;
-    warn_platform_limitations();
+        App::prepare(settings).await?.run().await
+    }
+    .await;
 
-    App::prepare(settings).await?.run().await
+    // App::run has already completed shaper restoration and worker cleanup.
+    log::finish(result.as_ref().err());
+    Ok(if result.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
