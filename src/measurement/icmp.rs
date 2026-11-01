@@ -10,9 +10,9 @@ use icmp_socket2::{
     packet::{IcmpPacketBuildError, WithEchoRequest, WithTimestampRequest},
     tokio::AsyncIcmpV4Socket,
 };
-use log::debug;
 use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, watch};
+use tracing::debug;
 
 use crate::{
     measurement::model::{

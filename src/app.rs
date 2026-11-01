@@ -18,7 +18,6 @@ use crate::reflector_selector::ReflectorSelector;
 use crate::reflector_setup::{ReflectorSetup, setup_reflectors};
 use crate::runtime::{Direction, Runtime};
 use crate::settings::{ReflectorProtocol, Settings};
-use ::log::{error, info};
 use anyhow::Context;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -29,6 +28,7 @@ use tokio::{
     sync::{mpsc, watch},
     task::{JoinError, JoinSet},
 };
+use tracing::{error, info};
 
 const SINK_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 type TaskResult = (&'static str, anyhow::Result<()>);

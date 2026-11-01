@@ -86,7 +86,7 @@ impl CsvWriter {
                 .await
                 && last_stats_warning.is_none_or(|last| last.elapsed() >= Duration::from_secs(60))
             {
-                log::warn!("Failed to write CSV statistics: {error}");
+                tracing::warn!("Failed to write CSV statistics: {error}");
                 last_stats_warning = Some(Instant::now());
             }
             if let Some(snapshot) = &record.history
@@ -95,14 +95,14 @@ impl CsvWriter {
                     .write_all(format_history(record.time, snapshot).as_bytes())
                     .await
             {
-                log::warn!("Failed to write CSV speed history: {error}");
+                tracing::warn!("Failed to write CSV speed history: {error}");
             }
         }
         if let Err(error) = self.stats.flush().await {
-            log::warn!("Failed to flush CSV statistics: {error}");
+            tracing::warn!("Failed to flush CSV statistics: {error}");
         }
         if let Err(error) = self.history.flush().await {
-            log::warn!("Failed to flush CSV speed history: {error}");
+            tracing::warn!("Failed to flush CSV speed history: {error}");
         }
         Ok(())
     }

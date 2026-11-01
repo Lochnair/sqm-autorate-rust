@@ -3,8 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use log::{error, warn};
 use tokio::{sync::watch, time};
+use tracing::{error, warn};
 
 use crate::{
     platform::{InterfaceStats, Platform},
@@ -127,7 +127,7 @@ impl Runtime {
         let stats = match self.platform.read_stats(&self.traffic_interface) {
             Ok(stats) => stats,
             Err(err) => {
-                log::warn!("Failed to read interface statistics: {err}");
+                tracing::warn!("Failed to read interface statistics: {err}");
 
                 if previous.take().is_some() {
                     *generation = generation.wrapping_add(1);

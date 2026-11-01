@@ -77,3 +77,30 @@ Use `list files '/path/to/reflectors.csv'` instead of `option files 'none'` to
 combine CSV files with inline reflectors. Omitting `files` keeps the default CSV;
 UCI discards empty string options, so `option files ''` does not disable it.
 Absent or blank `irtt_hmac` values use unauthenticated IRTT sessions.
+
+## Logging
+
+RAVEL uses plain-text tracing events on stdout with UTC timestamps, severity,
+source file/line, and the message. The existing TOML/UCI `output.log_level`
+values and default (`error`) are unchanged; filtering also applies to dependency
+`log` records. There is no `RUST_LOG` override. The startup banner is an info event.
+
+A dedicated tracing-appender OS thread writes the output. Its bounded queue holds
+1024 lines and drops new messages when full, so a slow or closed consumer does
+not apply I/O backpressure to network control or shaper restoration. Formatting
+and enqueueing still run on the calling thread.
+
+Logging is best effort, including at process exit. The worker guard is deliberately
+retained in a static for the whole process lifetime and is never dropped. There
+is no shutdown flush, join, or exit delay; queued messages, including final shutdown
+messages, may be lost. This avoids tracing-appender 0.2.5's synchronous `println!`
+in the guard's shutdown-timeout path. The retained guard keeps a queue sender
+alive, preventing both worker disconnection and its final-flush error-reporting
+path. Ordinary output errors are ignored by the upstream worker loop. Review
+these implementation details before updating the pinned tracing-appender version.
+
+Upstream's constructor still panics if its OS logging thread cannot be spawned;
+there is no fallible constructor. This is a resource-exhaustion initialization
+limitation, separate from output failures. Subscriber/bridge initialization errors
+are returned normally. Logging does not provide crash durability or a hard
+allocation/formatting latency bound.

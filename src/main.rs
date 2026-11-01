@@ -30,11 +30,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("Starting sqm-autorate-rust version {}", VERSION);
-
     let settings = Settings::load()?;
 
     log::init(settings.output.log_level)?;
+    tracing::info!("Starting sqm-autorate-rust version {}", VERSION);
     warn_platform_limitations();
 
     App::prepare(settings).await?.run().await

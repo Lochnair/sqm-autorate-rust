@@ -10,12 +10,12 @@ use crate::measurement::model::MeasurementStream;
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
 use crate::util::RwLockExt;
-use log::{debug, info};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
+use tracing::{debug, info};
 
 fn recent_rtt_for_peer(
     snapshot: Option<&ControlSnapshot>,

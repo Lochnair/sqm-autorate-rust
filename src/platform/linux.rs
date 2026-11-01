@@ -5,10 +5,10 @@
 use std::io;
 use std::sync::Mutex;
 
-use log::info;
 use netlink_bindings::{consts, rt_link, tc};
 use netlink_socket2::NetlinkSocket;
 use thiserror::Error;
+use tracing::info;
 
 use crate::platform::InterfaceStats;
 

@@ -4,8 +4,8 @@ use std::{
 };
 
 use anyhow::Context;
-use log::{debug, warn};
 use tokio::sync::watch;
+use tracing::{debug, warn};
 
 use crate::{
     diagnostics::{DiagnosticRecord, DiagnosticsSender, DirectionStatistics, SpeedHistory},

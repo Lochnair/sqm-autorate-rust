@@ -7,8 +7,8 @@ use std::io;
 use std::mem::size_of;
 use std::ptr;
 
-use log::warn;
 use thiserror::Error;
+use tracing::warn;
 
 use crate::platform::InterfaceStats;
 

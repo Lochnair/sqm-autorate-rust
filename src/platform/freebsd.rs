@@ -7,7 +7,7 @@ use std::io;
 use std::mem::{MaybeUninit, size_of};
 use std::ptr;
 
-use log::warn;
+use tracing::warn;
 
 use crate::platform::InterfaceStats;
 

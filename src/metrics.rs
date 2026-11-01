@@ -7,7 +7,6 @@ use crate::runtime::Direction;
 use crate::settings::Settings;
 use crate::settings::{ObservabilityProtocol, ObservabilitySettings};
 use crate::time::{ClockSample, Realtime};
-use log::{info, warn};
 use std::fmt::Write;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -16,6 +15,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
+use tracing::{info, warn};
 
 const MAX_RECONNECT_BACKOFF: u64 = 60;
 

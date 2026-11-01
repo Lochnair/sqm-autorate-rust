@@ -6,9 +6,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::settings::{ReflectorDefinition, ReflectorProtocol, Settings};
-use log::warn;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use tracing::warn;
 
 pub(crate) struct ReflectorSetup {
     pub(crate) initial: Vec<SocketAddr>,

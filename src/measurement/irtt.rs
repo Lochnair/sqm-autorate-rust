@@ -9,9 +9,9 @@ use irtt_client::{
         ManagedTargetConfig, ManagedTargetEndReason, ManagedTargetLifecycle, TargetAuth, TargetId,
     },
 };
-use log::{debug, trace, warn};
 use thiserror::Error;
 use tokio::sync::{broadcast::error::RecvError, mpsc::UnboundedSender, watch};
+use tracing::{debug, trace, warn};
 
 use crate::measurement::model::{
     MeasurementEvent, MeasurementLoss, MeasurementObservation, MeasurementStream,

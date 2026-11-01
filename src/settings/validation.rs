@@ -54,7 +54,7 @@ impl ValidationReport {
         for issue in self.issues {
             match issue.severity {
                 ValidationSeverity::Warning => {
-                    eprintln!("warning: {}: {}", issue.path, issue.message);
+                    tracing::warn!("{}: {}", issue.path, issue.message);
                 }
 
                 ValidationSeverity::Error => {

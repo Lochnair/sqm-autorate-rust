@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::platform::Platform;
-use log::debug;
 use std::convert::Infallible;
+use tracing::debug;
 
 impl Platform {
     pub(crate) fn validate_shaper(&self, _interface: &str) -> Result<(), Infallible> {
