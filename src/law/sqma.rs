@@ -9,6 +9,7 @@ use tokio::sync::watch;
 
 use crate::{
     diagnostics::{DiagnosticRecord, DiagnosticsSender, DirectionStatistics, SpeedHistory},
+    error::ChannelClosed,
     law::{Law, LawContext},
     measurement::model::{MeasurementEvent, MeasurementObservation, MeasurementStream},
     metrics::Metric,
@@ -120,7 +121,7 @@ impl Law for SqmaLaw {
         loop {
             tokio::select! {
                 event = ctx.measurements.recv() => {
-                    let event = event.context("Measurement channel closed")?;
+                    let event = event.ok_or(ChannelClosed).context("Measurement channel closed")?;
                     self.observe(event, &ctx)?;
                 }
 

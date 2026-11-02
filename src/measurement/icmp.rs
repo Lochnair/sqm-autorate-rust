@@ -15,6 +15,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc::UnboundedSender, watch};
 
 use crate::{
+    error::ChannelClosed,
     measurement::model::{
         MeasurementEvent, MeasurementLoss, MeasurementObservation, MeasurementSource,
         MeasurementStream, MeasurementStreamId, OneWayClock, OneWayLatency, ProbeSchedule,
@@ -79,10 +80,10 @@ pub enum IcmpError {
     UnsupportedPeer(IpAddr),
 
     #[error("event channel closed")]
-    EventChannelClosed,
+    EventChannelClosed(#[source] ChannelClosed),
 
     #[error("binding channel closed")]
-    BindingChannelClosed,
+    BindingChannelClosed(#[source] ChannelClosed),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -426,7 +427,7 @@ impl IcmpEngine {
                     started_at: probe.sent_at,
                     detected_at: now,
                 }))
-                .map_err(|_| IcmpError::EventChannelClosed)?;
+                .map_err(|_| IcmpError::EventChannelClosed(ChannelClosed))?;
         }
 
         Ok(())
@@ -447,7 +448,7 @@ impl IcmpEngine {
 
             tokio::select! {
                 bindings = self.binding_rx.changed() => {
-                    bindings.map_err(|_| IcmpError::BindingChannelClosed)?;
+                    bindings.map_err(|_| IcmpError::BindingChannelClosed(ChannelClosed))?;
 
                     let bindings = self.binding_rx.borrow_and_update().clone();
                     self.set_bindings(bindings)?;
@@ -469,7 +470,7 @@ impl IcmpEngine {
                         Ok(observation) => {
                             self.observation_tx
                                 .send(MeasurementEvent::Observation(observation))
-                                .map_err(|_| IcmpError::EventChannelClosed)?;
+                                .map_err(|_| IcmpError::EventChannelClosed(ChannelClosed))?;
                         }
 
                         Err(

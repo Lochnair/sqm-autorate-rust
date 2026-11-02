@@ -10,6 +10,7 @@ extern crate core;
 mod app;
 mod controller;
 mod diagnostics;
+mod error;
 mod law;
 mod log;
 mod measurement;

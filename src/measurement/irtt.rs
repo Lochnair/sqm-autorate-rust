@@ -13,6 +13,7 @@ use log::{debug, trace, warn};
 use thiserror::Error;
 use tokio::sync::{broadcast::error::RecvError, mpsc::UnboundedSender, watch};
 
+use crate::error::ChannelClosed;
 use crate::measurement::model::{
     MeasurementEvent, MeasurementLoss, MeasurementObservation, MeasurementStream,
     MeasurementStreamId, OneWayClock, OneWayLatency, SignedDuration,
@@ -25,10 +26,10 @@ pub enum IrttError {
     InvalidConfig(#[from] ManagedConfigError),
 
     #[error("event channel closed")]
-    EventChannelClosed,
+    EventChannelClosed(#[source] ChannelClosed),
 
     #[error("binding channel closed")]
-    BindingChannelClosed,
+    BindingChannelClosed(#[source] ChannelClosed),
 
     #[error("error while reciving on channel")]
     ChannelRecvError(#[from] RecvError),
@@ -158,7 +159,7 @@ impl IrttEngine {
         loop {
             tokio::select! {
                 bindings = self.binding_rx.changed() => {
-                    bindings.map_err(|_| IrttError::BindingChannelClosed)?;
+                    bindings.map_err(|_| IrttError::BindingChannelClosed(ChannelClosed))?;
 
                     let bindings = self.binding_rx.borrow_and_update().clone();
                     self.set_bindings(bindings).await?;
@@ -270,7 +271,7 @@ impl IrttEngine {
 
                                     self.observation_tx
                                         .send(MeasurementEvent::Observation(observation))
-                                        .map_err(|_| IrttError::EventChannelClosed)?;
+                                        .map_err(|_| IrttError::EventChannelClosed(ChannelClosed))?;
                                 }
 
                                 ClientEvent::EchoLoss {
@@ -290,7 +291,7 @@ impl IrttEngine {
 
                                     self.observation_tx
                                         .send(MeasurementEvent::Loss(loss))
-                                        .map_err(|_| IrttError::EventChannelClosed)?;
+                                        .map_err(|_| IrttError::EventChannelClosed(ChannelClosed))?;
                                 }
 
                                 ClientEvent::DuplicateReply { seq, .. } => {

@@ -6,14 +6,12 @@ use std::{
 };
 
 use thiserror::Error;
-use tokio::sync::{
-    mpsc::UnboundedReceiver,
-    watch::{self, error::SendError},
-};
+use tokio::sync::{mpsc::UnboundedReceiver, watch};
 
 #[cfg(feature = "irtt")]
 use crate::measurement::irtt::IrttBinding;
 use crate::{
+    error::ChannelClosed,
     measurement::{
         icmp::IcmpBinding,
         model::{MeasurementSource, MeasurementStream, MeasurementStreamId, ProbeSchedule},
@@ -24,10 +22,10 @@ use crate::{
 #[derive(Debug, Error)]
 pub enum ControllerError {
     #[error("ICMP channel error")]
-    IcmpChannelError(#[from] SendError<Vec<IcmpBinding>>),
+    IcmpChannelError(#[source] ChannelClosed),
     #[cfg(feature = "irtt")]
     #[error("IRTT channel error")]
-    IrttChannelError(#[from] SendError<Vec<IrttBinding>>),
+    IrttChannelError(#[source] ChannelClosed),
 }
 
 pub struct Controller {
@@ -143,9 +141,13 @@ impl Controller {
             .endpoint_streams
             .write()
             .expect("endpoint stream lock poisoned") = endpoint_streams;
-        self.icmp_binding_tx.send(icmp)?;
+        self.icmp_binding_tx
+            .send(icmp)
+            .map_err(|_| ControllerError::IcmpChannelError(ChannelClosed))?;
         #[cfg(feature = "irtt")]
-        self.irtt_binding_tx.send(irtt)?;
+        self.irtt_binding_tx
+            .send(irtt)
+            .map_err(|_| ControllerError::IrttChannelError(ChannelClosed))?;
         Ok(())
     }
 }

@@ -5,11 +5,13 @@
 //
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::error::ChannelClosed;
 use crate::law::ControlSnapshot;
 use crate::measurement::model::MeasurementStream;
 use crate::metrics::{Metric, MetricsSender};
 use crate::settings::Settings;
 use crate::util::RwLockExt;
+use anyhow::Context;
 use log::{debug, info};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -104,7 +106,10 @@ impl ReflectorSelector {
                 // Clone next_peers because we need it again after the baseline sleep
                 // to iterate over candidates for RTT measurement.
                 *reflectors_peers = next_peers.clone();
-                self.reflector_tx.send(next_peers.clone())?;
+                self.reflector_tx
+                    .send(next_peers.clone())
+                    .map_err(|_| ChannelClosed)
+                    .context("Reflector update channel closed")?;
 
                 current_peers
             };
@@ -157,7 +162,10 @@ impl ReflectorSelector {
 
             if candidates.is_empty() {
                 info!("No usable reflectors, retaining current set");
-                self.reflector_tx.send(current_peers.clone())?;
+                self.reflector_tx
+                    .send(current_peers.clone())
+                    .map_err(|_| ChannelClosed)
+                    .context("Reflector update channel closed")?;
                 *reflectors_peers = current_peers;
                 continue;
             }
@@ -183,7 +191,10 @@ impl ReflectorSelector {
                 });
             }
 
-            self.reflector_tx.send(new_peers.clone())?;
+            self.reflector_tx
+                .send(new_peers.clone())
+                .map_err(|_| ChannelClosed)
+                .context("Reflector update channel closed")?;
             *reflectors_peers = new_peers;
         }
     }

@@ -7,6 +7,7 @@
 
 use crate::controller::Controller;
 use crate::diagnostics::CsvWriter;
+use crate::error::ChannelClosed;
 use crate::law::{Law, LawContext, SqmaLaw};
 use crate::measurement::icmp::IcmpEngine;
 #[cfg(feature = "irtt")]
@@ -249,8 +250,15 @@ impl App {
                 }
             } => result,
         };
-        let reason = if result.is_err() { "error" } else { "signal" };
-        let cleanup = shutdown(&runtime, workers, sinks, metrics, restore_required, reason).await;
+        let cleanup = shutdown(
+            &runtime,
+            workers,
+            sinks,
+            metrics,
+            restore_required,
+            result.is_ok(),
+        )
+        .await;
         match (result, cleanup) {
             (Err(primary), Err(cleanup)) => {
                 Err(primary.context(format!("Shutdown also failed: {cleanup:#}")))
@@ -295,12 +303,12 @@ async fn shutdown(
     mut sinks: JoinSet<TaskResult>,
     metrics: MetricsSender,
     restore_required: bool,
-    reason: &'static str,
+    signal_teardown: bool,
 ) -> anyhow::Result<()> {
     let mut failures = Vec::new();
     workers.abort_all();
     while let Some(completed) = workers.join_next().await {
-        if let Err(error) = shutdown_completion(completed) {
+        if let Err(error) = shutdown_completion(completed, signal_teardown) {
             error!("Worker shutdown failed: {error:#}");
             failures.push(format!("{error:#}"));
         }
@@ -315,14 +323,14 @@ async fn shutdown(
 
     metrics.send(Metric::Event {
         name: "stopping",
-        reason,
+        reason: if signal_teardown { "signal" } else { "error" },
         reflector: None,
         tags: &[],
     });
     drop(metrics);
     let drained = tokio::time::timeout(SINK_DRAIN_TIMEOUT, async {
         while let Some(completed) = sinks.join_next().await {
-            if let Err(error) = shutdown_completion(completed) {
+            if let Err(error) = shutdown_completion(completed, false) {
                 error!("Output shutdown failed: {error:#}");
                 failures.push(format!("{error:#}"));
             }
@@ -336,7 +344,7 @@ async fn shutdown(
         ));
         sinks.abort_all();
         while let Some(completed) = sinks.join_next().await {
-            if let Err(error) = shutdown_completion(completed) {
+            if let Err(error) = shutdown_completion(completed, false) {
                 failures.push(format!("{error:#}"));
             }
         }
@@ -356,8 +364,16 @@ fn unexpected_completion(completed: Option<Result<TaskResult, JoinError>>) -> an
     }
 }
 
-fn shutdown_completion(completed: Result<TaskResult, JoinError>) -> anyhow::Result<()> {
+fn shutdown_completion(
+    completed: Result<TaskResult, JoinError>,
+    signal_teardown: bool,
+) -> anyhow::Result<()> {
     match completed {
+        Ok((_, Err(error)))
+            if signal_teardown && error.chain().any(|cause| cause.is::<ChannelClosed>()) =>
+        {
+            Ok(())
+        }
         Ok((name, result)) => result.with_context(|| format!("{name} failed")),
         Err(error) if error.is_cancelled() => Ok(()),
         Err(error) => Err(error).context("Joining task during shutdown"),
