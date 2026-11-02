@@ -324,7 +324,7 @@ impl Metrics {
                 writeln!(
                     out,
                     "sqm_ping,host={host_tag},reflector={reflector},type={measurement_type} \
-                    rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}i"
+                    rtt={rtt:.3},up_time={up_time:.3},down_time={down_time:.3} {timestamp_ns}"
                 )
                 .unwrap_or(());
             }
@@ -340,7 +340,7 @@ impl Metrics {
                 };
                 writeln!(out,
                     "sqm_rate,host={host_tag},direction={direction} \
-                    rate_kbps={rate_kbps:.0},load={load:.4},delta_delay={delta_delay:.3} {timestamp_ns}i"
+                    rate_kbps={rate_kbps:.0},load={load:.4},delta_delay={delta_delay:.3} {timestamp_ns}"
                 ).unwrap_or(());
             }
             Metric::Baseline {
@@ -352,11 +352,11 @@ impl Metrics {
             } => {
                 writeln!(out,
                     "sqm_baseline,host={host_tag},reflector={reflector},direction=up \
-                    baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}i"
+                    baseline_ewma={baseline_up_ewma:.3},recent_ewma={recent_up_ewma:.3} {timestamp_ns}"
                 ).unwrap_or(());
                 writeln!(out,
                     "sqm_baseline,host={host_tag},reflector={reflector},direction=down \
-                    baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}i"
+                    baseline_ewma={baseline_down_ewma:.3},recent_ewma={recent_down_ewma:.3} {timestamp_ns}"
                 ).unwrap_or(());
             }
             Metric::Event {
