@@ -26,6 +26,7 @@ enum Transport {
         host: String,
         port: u16,
         reconnect_backoff: u64,
+        next_reconnect_at: tokio::time::Instant,
     },
 }
 
@@ -42,6 +43,7 @@ impl Transport {
             host: host.to_string(),
             port,
             reconnect_backoff: 1,
+            next_reconnect_at: tokio::time::Instant::now(),
         }
     }
 
@@ -61,8 +63,13 @@ impl Transport {
                 host,
                 port,
                 reconnect_backoff,
+                next_reconnect_at,
             } => {
                 if stream.is_none() {
+                    // Drop this batch during backoff so the exporter can keep draining.
+                    if tokio::time::Instant::now() < *next_reconnect_at {
+                        return;
+                    }
                     match TcpStream::connect((host.as_str(), *port)).await {
                         Ok(s) => {
                             info!("Connected to metrics collector at {}:{}", host, port);
@@ -74,6 +81,8 @@ impl Transport {
                                 "Failed to connect to {}:{} - {}, backoff {}s",
                                 host, port, e, reconnect_backoff
                             );
+                            *next_reconnect_at = tokio::time::Instant::now()
+                                + Duration::from_secs(*reconnect_backoff);
                             *reconnect_backoff =
                                 (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
                             return;
@@ -93,6 +102,8 @@ impl Transport {
                     if !matches!(result, Ok(Ok(()))) {
                         warn!("TCP send failed: {result:?}");
                         *stream = None;
+                        *next_reconnect_at =
+                            tokio::time::Instant::now() + Duration::from_secs(*reconnect_backoff);
                         *reconnect_backoff = (*reconnect_backoff * 2).min(MAX_RECONNECT_BACKOFF);
                     }
                 }
