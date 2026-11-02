@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026-Present Nils Andreas Svee mailto:contact@lochnair.net (github @Lochnair)
+//
+// SPDX-License-Identifier: MPL-2.0
+
 //! Best-effort CSV diagnostics, independent of the metrics exporter.
 use std::time::{Duration, Instant, SystemTime};
 
