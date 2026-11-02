@@ -167,7 +167,7 @@ impl SqmaLaw {
         let size = self.settings.advanced_settings.speed_hist_size;
 
         if let Some(shaper) = ctx.shaper(Direction::Download) {
-            let initial = shaper.base_kbps * 0.6;
+            let initial = (shaper.base_kbps * 0.6).max(shaper.min_kbps);
 
             ctx.set_rate(Direction::Download, initial)?;
 
@@ -178,7 +178,7 @@ impl SqmaLaw {
         }
 
         if let Some(shaper) = ctx.shaper(Direction::Upload) {
-            let initial = shaper.base_kbps * 0.6;
+            let initial = (shaper.base_kbps * 0.6).max(shaper.min_kbps);
 
             ctx.set_rate(Direction::Upload, initial)?;
 
