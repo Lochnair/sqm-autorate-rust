@@ -354,11 +354,18 @@ impl AdvancedSettings {
             self.high_load_level,
         );
 
-        validate_greater_than_zero_f64(
+        if validate_greater_than_zero_f64(
             report,
             "advanced_settings.min_change_interval",
             self.min_change_interval,
-        );
+        ) && !std::time::Duration::try_from_secs_f64(self.min_change_interval)
+            .is_ok_and(|interval| !interval.is_zero())
+        {
+            report.error(
+                "advanced_settings.min_change_interval",
+                "must convert to a nonzero representable duration",
+            );
+        }
 
         validate_greater_than_zero_f64(
             report,
@@ -452,6 +459,29 @@ mod tests {
             measurement_bind_device: None,
             measurement_mark: None,
             measurement_fib: None,
+        }
+    }
+
+    #[test]
+    fn min_change_interval_must_be_a_nonzero_representable_duration() {
+        for value in [1e-300, 0.49e-9, f64::MAX] {
+            let settings = AdvancedSettings {
+                min_change_interval: value,
+                ..Default::default()
+            };
+            let mut report = ValidationReport::default();
+            settings.validate(&mut report);
+            let error = report.finish().unwrap_err().to_string();
+            assert!(error.contains("advanced_settings.min_change_interval"));
+        }
+        for value in [1e-9, 0.5] {
+            let settings = AdvancedSettings {
+                min_change_interval: value,
+                ..Default::default()
+            };
+            let mut report = ValidationReport::default();
+            settings.validate(&mut report);
+            assert!(report.finish().is_ok());
         }
     }
 
