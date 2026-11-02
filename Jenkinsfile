@@ -69,15 +69,15 @@ pipeline {
                             sh '''
                                 # 1. Construct the specific path for the current architecture
                                 # CARGO_BUILD_TARGET is provided by the Docker image (e.g., aarch64-unknown-linux-musl)
-                                BINARY_PATH="target/${CARGO_BUILD_TARGET}/release/sqm-autorate-rust"
+                                BINARY_PATH="target/${CARGO_BUILD_TARGET}/release/unravel"
 
                                 # 2. Verify it exists
                                 if [ -f "$BINARY_PATH" ]; then
                                     echo "Found compiled binary at: $BINARY_PATH"
 
-                                    # 3. Rename with the matrix tag (e.g., sqm-autorate-rust-aarch64-musl)
+                                    # 3. Rename with the matrix tag (e.g., unravel-aarch64-musl)
                                     # This ensures unique filenames in the shared workspace root
-                                    cp "$BINARY_PATH" "sqm-autorate-rust-${TARGET}"
+                                    cp "$BINARY_PATH" "unravel-${TARGET}"
                                 else
                                     echo "ERROR: Could not find binary at $BINARY_PATH"
                                     # List target dir to help debug if it fails
@@ -87,7 +87,7 @@ pipeline {
                             '''
 
                             // 4. Archive the specific file we just copied
-                            archiveArtifacts artifacts: "sqm-autorate-rust-${TARGET}", fingerprint: true, onlyIfSuccessful: true
+                            archiveArtifacts artifacts: "unravel-${TARGET}", fingerprint: true, onlyIfSuccessful: true
                         }
                     }
 				}

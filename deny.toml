@@ -1,4 +1,4 @@
-# cargo-deny policy for sqm-autorate-rust.
+# cargo-deny policy for unravel.
 # Keep published dependency sources and license terms explicit while allowing
 # advisory reports to be reviewed without blocking unrelated changes.
 

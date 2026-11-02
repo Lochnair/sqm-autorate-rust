@@ -172,7 +172,7 @@ struct ReflectorRow {
 }
 
 #[derive(Clone, Debug, Deserialize, UciConfig)]
-#[uci(package = "sqm-autorate-rust")]
+#[uci(package = "unravel")]
 pub(crate) struct Settings {
     #[uci(section)]
     pub(crate) network: NetworkSettings,
@@ -217,12 +217,11 @@ impl Settings {
         );
 
         #[cfg(feature = "toml")]
-        let builder = builder.add_source(
-            config::File::with_name("/etc/sqm-autorate-rust/config.toml").required(false),
-        );
+        let builder =
+            builder.add_source(config::File::with_name("/etc/unravel/config.toml").required(false));
 
         let builder = builder.add_source(
-            Environment::with_prefix("SQMA")
+            Environment::with_prefix("UNRAVEL")
                 .separator("__")
                 .try_parsing(true)
                 .list_separator(",")
@@ -355,7 +354,7 @@ impl Default for ReflectorSettings {
         };
 
         Self {
-            files: vec!["/etc/sqm-autorate-rust/reflectors.csv".into()],
+            files: vec!["/etc/unravel/reflectors.csv".into()],
             countries: Vec::new(),
             entries: Vec::new(),
             bootstrap: vec![
@@ -392,8 +391,8 @@ impl Default for OutputSettings {
     fn default() -> Self {
         Self {
             log_level: Level::Error,
-            speed_hist_file: "/tmp/sqm-speedhist.csv".to_owned(),
-            stats_file: "/tmp/sqm-autorate-rust.csv".to_owned(),
+            speed_hist_file: "/tmp/unravel-speedhist.csv".to_owned(),
+            stats_file: "/tmp/unravel.csv".to_owned(),
             suppress_statistics: false,
         }
     }

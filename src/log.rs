@@ -86,7 +86,7 @@ pub(crate) fn finish(error: Option<&anyhow::Error>) {
 pub(crate) fn init() -> anyhow::Result<()> {
     let (sender, receiver) = mpsc::sync_channel::<Message>(1024);
     let worker = thread::Builder::new()
-        .name("ravel-logger".to_owned())
+        .name("unravel-logger".to_owned())
         .spawn(move || {
             let mut stdout = io::stdout().lock();
             while let Ok(message) = receiver.recv() {

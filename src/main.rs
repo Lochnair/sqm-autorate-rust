@@ -34,10 +34,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 async fn main() -> anyhow::Result<ExitCode> {
     // Initialization errors return before any shaper can be modified.
     log::init()?;
-    log::message(format_args!(
-        "Starting sqm-autorate-rust version {}",
-        VERSION
-    ));
+    log::message(format_args!("Starting unRAVEL version {}", VERSION));
 
     let result = async {
         let settings = Settings::load()?;

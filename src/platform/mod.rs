@@ -21,7 +21,7 @@ mod linux;
 mod macos;
 
 #[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos")))]
-compile_error!("RAVEL supports only Linux, FreeBSD, and macOS");
+compile_error!("unRAVEL supports only Linux, FreeBSD, and macOS");
 
 #[cfg(target_os = "freebsd")]
 pub(crate) use freebsd::{Platform, warn_platform_limitations};

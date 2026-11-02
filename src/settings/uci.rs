@@ -360,12 +360,12 @@ mod tests {
 
     #[test]
     fn malformed_optional_package_is_an_error() {
-        let root = std::env::temp_dir().join(format!("sqma-uci-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("unravel-uci-{}", std::process::id()));
         let config_dir = root.join("config");
         let save_dir = root.join("save");
         fs::create_dir_all(&config_dir).unwrap();
         fs::create_dir_all(&save_dir).unwrap();
-        let config_file = config_dir.join("sqm-autorate-rust");
+        let config_file = config_dir.join("unravel");
         fs::write(&config_file, "config network 'unterminated\n").unwrap();
 
         let source = UciSource::from_schema::<Settings>()

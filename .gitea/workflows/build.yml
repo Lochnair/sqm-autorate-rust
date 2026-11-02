@@ -80,7 +80,7 @@ jobs:
 
       - name: Verify, package, and summarize binary
         run: |
-          binary="target/${RUST_TARGET}/release/sqm-autorate-rust"
+          binary="target/${RUST_TARGET}/release/unravel"
           readelf --program-headers "$binary" > /tmp/program-headers.txt
           readelf --dynamic "$binary" > /tmp/dynamic-section.txt
           if grep -q INTERP /tmp/program-headers.txt || grep -q NEEDED /tmp/dynamic-section.txt; then
@@ -88,12 +88,12 @@ jobs:
             exit 1
           fi
           mkdir -p dist
-          stripped="dist/sqm-autorate-rust-${TARGET}"
+          stripped="dist/unravel-${TARGET}"
           artifact="${stripped}.tar.gz"
           cp "$binary" "$stripped"
           llvm-strip --strip-all "$stripped"
           # Tar preserves executable permissions when downloading the artifact.
-          tar -czf "$artifact" -C dist "sqm-autorate-rust-${TARGET}"
+          tar -czf "$artifact" -C dist "unravel-${TARGET}"
 
           size() {
             stat -c %s "$1" | numfmt --to=iec-i --suffix=B --format='%.1f'
@@ -109,6 +109,6 @@ jobs:
         # Use the v3 artifact protocol supported by Gitea.
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sqm-autorate-rust-${{ matrix.target }}
-          path: dist/sqm-autorate-rust-${{ matrix.target }}.tar.gz
+          name: unravel-${{ matrix.target }}
+          path: dist/unravel-${{ matrix.target }}.tar.gz
           if-no-files-found: error

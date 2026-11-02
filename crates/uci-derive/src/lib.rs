@@ -30,7 +30,7 @@ pub fn derive_uci_section(input: TokenStream) -> TokenStream {
 /// Required container attribute:
 ///
 /// ```ignore
-/// #[uci(package = "sqm-autorate-rust")]
+/// #[uci(package = "unravel")]
 /// ```
 ///
 /// Every field must specify its UCI section:
