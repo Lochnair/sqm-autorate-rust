@@ -23,23 +23,19 @@ Both should show CAKE at the root if you're controlling both directions. Run unR
 
 ### OpenWrt package
 
-Download the package for your OpenWrt release and package architecture from the [openwrt-feeds build artifacts](https://github.com/Lochnair/openwrt-feeds/actions/workflows/build.yml). Extract the artifact and copy the `unravel` package to `/tmp` on your router.
-
-On a router using opkg, install the `.ipk` package:
+On OpenWrt 25.12, you can install unRAVEL from [my APK feed](https://openwrt.lochnair.net). Run this as root on your router; it reads your package architecture from `/etc/openwrt_release`:
 
 ```sh
-opkg update
-opkg install /tmp/unravel_*.ipk
-```
-
-On a router using [APK](https://openwrt.org/docs/guide-user/additional-software/apk), install the `.apk` package instead:
-
-```sh
+. /etc/openwrt_release
+wget -O /etc/apk/keys/lochnair-apk.pem https://openwrt.lochnair.net/keys/lochnair-apk.pem
+echo "https://openwrt.lochnair.net/25.12/${DISTRIB_ARCH}/packages.adb" >> /etc/apk/repositories.d/customfeeds.list
 apk update
-apk add --allow-untrusted /tmp/unravel*.apk
+apk add unravel
 ```
 
-The build artifacts contain unsigned packages, hence `--allow-untrusted` for APK. The package includes the binary, UCI configuration and init script. Edit the configuration before starting the service.
+The package includes the binary, reflector inventory, UCI configuration and init script. Edit the configuration before starting the service.
+
+The feed only publishes APK packages. For older OpenWrt releases using opkg, build an `.ipk` with the SDK below.
 
 ### Building with the OpenWrt SDK
 
@@ -61,7 +57,18 @@ Select `unravel` under Utilities, save the configuration, then build:
 make package/unravel/compile V=s
 ```
 
-The resulting package is under `bin/packages/`. Copy it to your router and install it as shown above.
+The resulting package is under `bin/packages/`. Copy it to `/tmp` on your router. For an `.ipk`, install it with:
+
+```sh
+opkg update
+opkg install /tmp/unravel_*.ipk
+```
+
+For a manually built `.apk`, use:
+
+```sh
+apk add --allow-untrusted /tmp/unravel*.apk
+```
 
 ### Building with Cargo
 
@@ -71,7 +78,7 @@ For other Linux systems, use a current stable Rust toolchain. The default build 
 sudo apt install build-essential cmake libclang-dev pkg-config
 ```
 
-The clone URL below requires the planned GitHub repository rename to `Lochnair/unravel`:
+Then clone and build:
 
 ```sh
 git clone https://github.com/Lochnair/unravel.git
@@ -88,7 +95,7 @@ If you only want TOML configuration and don't need UCI, build with `cargo build 
 
 On OpenWrt, edit `/etc/config/unravel`. If you're moving from `sqm-autorate-rust`, check the [migration notes](MIGRATION.md) first.
 
-For builds with UCI and TOML support, TOML settings override UCI and environment variables override both. The TOML file is `/etc/unravel/config.toml`. You only need to use one source, so on OpenWrt you can stick with UCI.
+UCI is enough for OpenWrt. For builds with TOML support, `/etc/unravel/config.toml` overrides UCI settings if both files are present.
 
 ### UCI
 
@@ -132,18 +139,9 @@ log_level = "info"
 
 If you only want to control upload, set `option download_interface 'none'` in UCI, or `download_interface = "none"` in TOML. You can then omit `download_base_kbits` and `download_min_percent`. The same applies to `upload_interface` if you only want download shaping. At least one direction must be enabled.
 
-### Environment variables
-
-Use `UNRAVEL__SECTION__OPTION`, with two underscores between each part. With the service stopped, you can try it without changing the shapers:
-
-```sh
-env UNRAVEL__ADVANCED_SETTINGS__DRY_RUN=true \
-    UNRAVEL__OUTPUT__LOG_LEVEL=info /usr/sbin/unravel
-```
-
-Dry run still needs the configured interfaces and CAKE qdiscs to exist. It also sends probes and writes diagnostics.
-
 ## Running it
+
+To try it without changing the shapers, set `option dry_run '1'` under `config advanced_settings` first. Dry run still needs the configured interfaces and CAKE qdiscs, and it sends probes and writes diagnostics. Set it back to `'0'` when you're ready to let it adjust the rates.
 
 After configuring the OpenWrt package, start the service and enable it at boot:
 
