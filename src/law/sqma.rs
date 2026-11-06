@@ -79,7 +79,7 @@ impl RateState {
 
                 if delta > delay_threshold_ms {
                     let rnd_rate = self.safe_rates[rng.usize(..self.safe_rates.len())];
-                    next_kbps = rnd_rate.min(0.9 * self.current_kbps * load);
+                    next_kbps = rnd_rate.min(0.9 * traffic_kbps);
                 }
             }
         }
