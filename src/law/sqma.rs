@@ -64,8 +64,7 @@ impl RateState {
 
                 if delta < delay_threshold_ms && load > high_load_level {
                     self.safe_rates.pop_front();
-                    self.safe_rates
-                        .push_back((self.current_kbps * load).floor());
+                    self.safe_rates.push_back(traffic_kbps.floor());
 
                     let max_rate = self
                         .safe_rates
