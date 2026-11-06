@@ -72,10 +72,10 @@ apk add --allow-untrusted /tmp/unravel*.apk
 
 ### Building with Cargo
 
-For other Linux systems, use a current stable Rust toolchain. The default build includes TOML, IRTT and a bundled copy of UCI. On Debian or Ubuntu, install the build dependencies first:
+For other Linux systems, use a current stable Rust toolchain. The default build includes TOML, IRTT and UCI file parsing. On Debian or Ubuntu, install the build tools first:
 
 ```sh
-sudo apt install build-essential cmake libclang-dev pkg-config
+sudo apt install build-essential
 ```
 
 Then clone and build:
@@ -89,11 +89,11 @@ sudo mkdir -p /etc/unravel
 sudo install -m 644 reflectors.csv /etc/unravel/reflectors.csv
 ```
 
-If you only want TOML configuration and don't need UCI, build with `cargo build --release --locked --no-default-features --features toml,irtt` to skip the UCI build dependencies.
+For a TOML-only build with IRTT support, run `cargo build --release --locked --no-default-features --features toml,irtt`.
 
 ## Configuration
 
-On OpenWrt, edit `/etc/config/unravel`. If you're moving from `sqm-autorate-rust`, check the [migration notes](MIGRATION.md) first.
+On OpenWrt, edit `/etc/config/unravel`. When making changes with `uci set`, run `uci commit unravel` before restarting the service so it reads the updated file. If you're moving from `sqm-autorate-rust`, check the [migration notes](MIGRATION.md) first.
 
 UCI is enough for OpenWrt. For builds with TOML support, `/etc/unravel/config.toml` overrides UCI settings if both files are present.
 

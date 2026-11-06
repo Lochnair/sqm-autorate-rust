@@ -30,6 +30,8 @@ allow = [
     "Zlib",
 ]
 
+exceptions = [{ name = "ucifer", allow = ["GPL-3.0-or-later"] }]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
@@ -42,7 +44,7 @@ unknown-registry = "deny"
 unknown-git = "deny"
 required-git-spec = "rev"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/Lochnair/rust-uci"]
+allow-git = []
 
 [sources.allow-org]
 github = []

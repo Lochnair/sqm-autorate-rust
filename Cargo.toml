@@ -42,14 +42,15 @@ netlink-bindings = { version = "0.3.5", features = ["rt-link", "tc"] }
 netlink-socket2 = { version = "0.3.5" }
 
 [target.'cfg(unix)'.dependencies]
-rust-uci = { git = "https://github.com/Lochnair/rust-uci.git", rev = "6835397f4f4ba8b69e75e727105186865c357417", optional = true, default-features = false }
+ucifer = { version = "0.5.0-rc.2", optional = true }
 
 [features]
-default = ["irtt", "toml", "uci-vendored"]
+default = ["irtt", "toml", "uci"]
 irtt = ["dep:irtt-client"]
 toml = ["config/toml"]
-uci = ["dep:rust-uci"]
-uci-vendored = ["uci", "rust-uci/vendored"]
+uci = ["dep:ucifer"]
+# Compatibility alias for builds that previously selected vendored libuci.
+uci-vendored = ["uci"]
 
 [workspace]
 members = ["crates/uci-derive"]
